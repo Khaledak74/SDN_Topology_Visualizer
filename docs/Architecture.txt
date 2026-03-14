@@ -1,0 +1,15 @@
+## Architecture
+
+			 
+		Mininet (virtual network)
+		     OpenFlow 1.0
+			  |
+			  v
+   POX Controller  +  topology_api.py  (REST on :8000)
+		    HTTP /topo/
+			  |
+		       	  v
+React.js Dashboard  (dev server on :3000, proxied to :8000)
+
+
+
