@@ -1,0 +1,22 @@
+# Node.js
+dashboard/node_modules/
+dashboard/build/
+dashboard/.env
+dashboard/.env.local
+
+# Python bytecode
+*.pyc
+__pycache__/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+npm-debug.log*
