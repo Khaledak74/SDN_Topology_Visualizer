@@ -59,7 +59,7 @@ POX Controller  +  topology_api.py  (REST on :8000)
 React.js Dashboard  (dev server on :3000, proxied to :8000)
 ```
 
-![Architecture](docs/Architecture.txt)
+
 
 
 ## Requirements
