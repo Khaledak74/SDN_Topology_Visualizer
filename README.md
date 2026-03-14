@@ -12,6 +12,10 @@
 
 ## Screenshots
 
+## Dashboard
+
+![Dashboard](docs/screenshots/Dashboard.jpeg)
+
 ### Live Topology Map
 ![Topology](docs/screenshots/topo_3.jpeg)
 
