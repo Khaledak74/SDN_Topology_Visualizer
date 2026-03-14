@@ -14,7 +14,7 @@
 
 ## Dashboard
 
-![Dashboard](docs/screenshots/Dashboard.jpeg)
+![Dashboard](docs/screenshots/Dashboard.png)
 
 ### Live Topology Map
 ![Topology](docs/screenshots/topo_3.jpeg)
