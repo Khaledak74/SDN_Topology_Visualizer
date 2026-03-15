@@ -109,15 +109,20 @@ cp controller/qos_topo.py ~/Desktop/qos_topo.py
 
 ### 5. Install Node.js (via nvm)
 ```bash
+sudo apt install curl
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
 source ~/.bashrc
-nvm install 20 && nvm use 20
+sudo chown $USER:$USER /home/"machine_name"/.nvm
+nvm install 20
+nvm use 20
+node --version   >  v20.x.x
+npm --version    > 10.x.x    
 ```
 
 ### 6. Install React dependencies
 ```bash
 cd dashboard
-npm install
+npm install      > > about 260 Mb
 ```
 
 
