@@ -1,8 +1,0 @@
-Make sure this line is in the dashboard/package.json before committing. Without it, the React app cannot talk to POX.
-
-{
-  "name": "pox-topology",
-  "version": "1.0.0",
-  "proxy": "http://localhost:8000",
-  "dependencies": { ... }
-}
