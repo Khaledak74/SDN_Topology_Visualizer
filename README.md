@@ -86,7 +86,7 @@ React.js Dashboard  (dev server on :3000, proxied to :8000)
 ### 1. Clone the repository
 ```bash
 git clone https://github.com/Khaledak74/SDN_Topology_Visualizer.git
-cd sdn-topology-visualizer
+cd SDN_Topology_Visualizer
 ```
 
 ### 2. Install system dependencies
