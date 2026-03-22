@@ -32,7 +32,7 @@ _alerts_lock    = _lk(); _alerts  = []; MAX_ALERTS = 1000; _alert_id = [0]
 _packets_lock   = _lk(); _packets = collections.deque(maxlen=10000)
 _pkt_id_ctr     = [0]
 _pkt_stats_lock = _lk()
-_pkt_stats      = {"total":0,"arp":0,"icmp":0,"tcp":0,"udp":0,"other":0,"hosts":{}}
+_pkt_stats      = {"total":0,"arp":0,"icmp":0,"tcp":0,"udp":0,"http":0,"https":0,"dns":0,"ssh":0,"dhcp":0,"ftp":0,"openflow":0,"other":0,"hosts":{}}
 _flows_lock     = _lk(); _flows = {}
 _bwh_lock       = _lk(); _bwh   = {}; BW_HIST = 120
 _conn_lock      = _lk(); _connections = {}; MAX_CONNS = 2000
@@ -55,6 +55,12 @@ _syn_state          = {}
 _ip_sweep_state     = {}
 _ttl_state          = {}
 _alert_history      = collections.deque(maxlen=500)
+_blocked_lock       = threading.Lock()
+_blocked_hosts      = {}   # ip -> {ip, ts, switches_affected, mac}
+_dismissed_lock     = threading.Lock()
+_dismissed_alerts   = []   # list of dismissed alert dicts
+_link_state_lock    = threading.Lock()
+_link_state         = {}   # "dpid1|dpid2" -> True/False (up/down)
 
 # Thresholds
 PORT_SCAN_THRESHOLD  = 15
@@ -210,6 +216,30 @@ class TrafficMonitor(EventMixin):
             body.match=of.ofp_match(); body.table_id=0xff
             body.out_port=of.OFPP_NONE
             conn.send(of.ofp_stats_request(body=body))
+        self._check_links()
+
+    def _check_links(self):
+        """Detect link up/down changes and log to events."""
+        if not core.hasComponent("openflow_discovery"): return
+        try:
+            current = {}
+            for l in core.openflow_discovery.adjacency:
+                k = "|".join(sorted([dpid_to_str(l[0]),dpid_to_str(l[1])]))
+                current[k] = True
+            with _link_state_lock:
+                prev = dict(_link_state)
+                for k in current:
+                    if not prev.get(k):
+                        _link_state[k] = True
+                        pts = k.split("|")
+                        _add_event("Link UP: %s <-> %s"%(pts[0][-4:],pts[1][-4:]),"info")
+                for k in prev:
+                    if prev[k] and k not in current:
+                        _link_state[k] = False
+                        pts = k.split("|")
+                        _add_event("Link DOWN: %s <-> %s"%(pts[0][-4:],pts[1][-4:]),"warn")
+        except Exception as ex:
+            log.warning("_check_links error: %s"%ex)
 
     def _handle_PacketIn(self, event):
         dpid = dpid_to_str(event.dpid); now = time.time()
@@ -240,6 +270,7 @@ class TrafficMonitor(EventMixin):
             if ip:
                 si=str(ip.srcip); di=str(ip.dstip)
                 ttl_val=ip.ttl; ip_proto_num=ip.protocol
+                # classify more protocols by port
                 if ip.protocol==ipv4.ICMP_PROTOCOL:
                     proto="icmp"; info="ICMP %s -> %s"%(si,di)
                 elif ip.protocol==ipv4.TCP_PROTOCOL:
@@ -251,6 +282,20 @@ class TrafficMonitor(EventMixin):
                             flags_rst=bool(t.RST); flags_fin=bool(t.FIN)
                         except: pass
                         info="TCP %s:%d -> %s:%d"%(si,sp,di,dp)
+                        # refine proto by well-known ports
+                        _p=min(sp,dp) if sp and dp else dp or sp
+                        if _p in (80,8080,8000,8888): proto="http"
+                        elif _p in (443,8443): proto="https"
+                        elif _p==22: proto="ssh"
+                        elif _p==21: proto="ftp"
+                        elif _p==23: proto="telnet"
+                        elif _p==25: proto="smtp"
+                        elif _p==3306: proto="mysql"
+                        elif _p==5432: proto="postgres"
+                        elif _p==6633: proto="openflow"
+                        elif _p==6653: proto="openflow"
+                        elif _p in (179,): proto="bgp"
+                        elif _p in (179,389,636): proto="bgp"
                     else: info="TCP %s -> %s"%(si,di)
                 elif ip.protocol==ipv4.UDP_PROTOCOL:
                     proto="udp"; u=ip.payload
@@ -258,6 +303,14 @@ class TrafficMonitor(EventMixin):
                         sp=u.srcport; dp=u.dstport
                         is_dns=(dp==53 or sp==53)
                         info="UDP %s:%d -> %s:%d"%(si,sp,di,dp)
+                        _p=min(sp,dp) if sp and dp else dp or sp
+                        if _p in (53,5353): proto="dns"
+                        elif _p in (67,68): proto="dhcp"
+                        elif _p==161: proto="snmp"
+                        elif _p==162: proto="snmp"
+                        elif _p==123: proto="ntp"
+                        elif _p==520: proto="rip"
+                        elif _p==5060: proto="sip"
                     else: info="UDP %s -> %s"%(si,di)
                 else:
                     info="IP proto=%d %s->%s"%(ip.protocol,si,di)
@@ -568,6 +621,8 @@ class TopologyHandler(SplitRequestHandler):
         elif parts==["cmdlog"]:        self._send(self._get_cmdlog())
         elif parts==["ctrlstats"]:     self._send(self._ctrlstats())
         elif parts==["test","run"]:    self._send(self._run_test(qs))
+        elif parts==["blocked","hosts"]: self._send(self._get_blocked())
+        elif parts==["alerts","dismissed"]: self._send(self._get_dismissed())
         else:
             self._send({"switches":self._sw(),"links":self._lk_data(),"hosts":self._ht()})
 
@@ -586,6 +641,7 @@ class TopologyHandler(SplitRequestHandler):
         elif parts==["cmdlog","add"]:        self._send(self._add_cmd(p))
         elif parts==["cmdlog","clear"]:      self._send(self._clr_cmd())
         elif parts==["block","host"]:        self._send(self._block_host(p))
+        elif parts==["unblock","host"]:      self._send(self._unblock_host(p))
         else: self._send({"error":"unknown"})
 
     # ---- topology -----------------------------------------------------------
@@ -702,7 +758,16 @@ class TopologyHandler(SplitRequestHandler):
         aid=p.get("id")
         with _alerts_lock:
             for a in _alerts:
-                if a["id"]==aid: a["active"]=False; return {"ok":True}
+                if a.get("id")==aid:
+                    a["active"]=False
+                    a["dismissed"]=True
+                    a["dismissed_ts"]=time.time()
+                    snapshot=dict(a)
+                    with _dismissed_lock:
+                        _dismissed_alerts.append(snapshot)
+                    _add_event("Alert dismissed: [%s] %s"%(
+                        a.get("severity","?"), a.get("type","?")), "info")
+                    return {"ok":True}
         return {"ok":False,"error":"not found"}
 
     def _clr(self):
@@ -743,14 +808,14 @@ class TopologyHandler(SplitRequestHandler):
 
     def _rps(self):
         with _pkt_stats_lock:
-            for k in ("total","arp","icmp","tcp","udp","other"): _pkt_stats[k]=0
+            for k in ("total","arp","icmp","tcp","udp","http","https","dns","ssh","dhcp","ftp","openflow","other"): _pkt_stats[k]=0
             _pkt_stats["hosts"]={}
         return {"ok":True}
 
     def _clrpkts(self):
         with _packets_lock: _packets.clear()
         with _pkt_stats_lock:
-            for k in ("total","arp","icmp","tcp","udp","other"): _pkt_stats[k]=0
+            for k in ("total","arp","icmp","tcp","udp","http","https","dns","ssh","dhcp","ftp","openflow","other"): _pkt_stats[k]=0
             _pkt_stats["hosts"]={}
         return {"ok":True}
 
@@ -934,7 +999,7 @@ class TopologyHandler(SplitRequestHandler):
 
     def _block_host(self,p):
         """Install drop rules for a host IP on all switches."""
-        ip=p.get("ip","")
+        ip=p.get("ip",""); mac=p.get("mac","")
         if not ip: return {"ok":False,"error":"ip required"}
         count=0
         if core.hasComponent("openflow"):
@@ -944,12 +1009,43 @@ class TopologyHandler(SplitRequestHandler):
                 try: msg.match.nw_src=IPAddr(ip)
                 except: continue
                 msg.match.dl_type=0x0800
-                # empty actions = DROP
                 conn.send(msg)
                 count+=1
-        _add_event("Host %s blocked on %d switches"%(ip,count),"warn")
+        with _blocked_lock:
+            _blocked_hosts[ip]={"ip":ip,"mac":mac,"ts":time.time(),"switches_affected":count}
+        _add_event("Host %s BLOCKED on %d switches"%(ip,count),"warn")
         log_command("block-host %s on %d switches"%(ip,count),"operator")
         return {"ok":True,"switches_affected":count}
+
+    def _unblock_host(self,p):
+        """Remove drop rules for a host IP from all switches."""
+        ip=p.get("ip","")
+        if not ip: return {"ok":False,"error":"ip required"}
+        count=0
+        if core.hasComponent("openflow"):
+            for conn in core.openflow.connections:
+                msg=of.ofp_flow_mod()
+                msg.command=of.OFPFC_DELETE
+                msg.priority=500; msg.match=of.ofp_match()
+                try: msg.match.nw_src=IPAddr(ip)
+                except: continue
+                msg.match.dl_type=0x0800
+                msg.out_port=of.OFPP_NONE
+                conn.send(msg)
+                count+=1
+        with _blocked_lock:
+            _blocked_hosts.pop(ip,None)
+        _add_event("Host %s UNBLOCKED on %d switches"%(ip,count),"info")
+        log_command("unblock-host %s on %d switches"%(ip,count),"operator")
+        return {"ok":True,"switches_affected":count}
+
+    def _get_blocked(self):
+        with _blocked_lock:
+            return list(_blocked_hosts.values())
+
+    def _get_dismissed(self):
+        with _dismissed_lock:
+            return list(_dismissed_alerts)
 
     def _ping(self,p):
         src=p.get("src",""); dst=p.get("dst","")

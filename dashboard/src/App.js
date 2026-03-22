@@ -11,7 +11,7 @@ const C={
   navy:"#1f2937",card:"#1c2128",dark:"#010409",cyan:"#79c0ff",pink:"#ff7b72",
 };
 const SEV={critical:"#f85149",high:"#f0883e",medium:"#e3b341",low:"#58a6ff"};
-const PROTO={arp:"#bc8cff",icmp:"#3fb950",tcp:"#58a6ff",udp:"#f0883e",other:"#8b949e"};
+const PROTO={arp:"#bc8cff",icmp:"#3fb950",tcp:"#58a6ff",udp:"#f0883e",http:"#e879f9",https:"#c026d3",dns:"#34d399",ssh:"#fbbf24",dhcp:"#60a5fa",ftp:"#f87171",openflow:"#a78bfa",snmp:"#94a3b8",ntp:"#67e8f9",other:"#8b949e"};
 const STABLE=4;
 const SVG_W=920, SVG_H=580;
 
@@ -145,6 +145,12 @@ export default function App(){
   // block host
   const [blockIp,setBlockIp]=useState("");
   const [blockMsg,setBlockMsg]=useState("");
+  const [blockedHosts,setBlockedHosts]=useState([]);
+  const [dismissedAlerts,setDismissedAlerts]=useState([]);
+  const [alertSub,setAlertSub]=useState("active");   // active|blocked|dismissed
+  const [alertSev,setAlertSev]=useState("all");      // all|critical|high|medium|low
+  const [alertSearch,setAlertSearch]=useState("");
+  const [threatSearch,setThreatSearch]=useState("");
   // incident notes
   const [incidentNotes,setIncidentNotes]=useState({});
 
@@ -253,6 +259,8 @@ export default function App(){
     try{
       const r=await fetch("/topo/alerts");if(!r.ok)return;
       const d=await r.json();setAlerts(d);
+      fetch("/topo/blocked/hosts").then(r=>r.json()).then(setBlockedHosts).catch(()=>{});
+      fetch("/topo/alerts/dismissed").then(r=>r.json()).then(setDismissedAlerts).catch(()=>{});;
       const ac=d.filter(a=>a.active&&(a.severity==="critical"||a.severity==="high")).length;
       if(ac>lastAlertRef.current)setUnreadAlerts(u=>u+(ac-lastAlertRef.current));
       lastAlertRef.current=ac;
@@ -552,7 +560,7 @@ export default function App(){
   // ── TAB: DASHBOARD ─────────────────────────────────────────────────────────
   const renderDashboard=()=>{
     const s=summary||{};const al=s.alerts||{};
-    const protos=["arp","icmp","tcp","udp","other"];
+    const protos=["arp","icmp","tcp","udp","http","https","dns","ssh","dhcp","ftp","openflow","other"];
     const totalPkts=pktStats.total||1;
     const now=Date.now()/1000;
     const buckets=Array(12).fill(0);
@@ -679,66 +687,184 @@ export default function App(){
 
   // ── TAB: ALERTS ─────────────────────────────────────────────────────────────
   const renderAlerts=()=>{
-    const dismiss=async id=>{await fetch("/topo/alerts/dismiss",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});pollAlerts();};
-    const clearAll=async()=>{await fetch("/topo/alerts/clear",{method:"POST"});pollAlerts();setUnreadAlerts(0);};
-    const blockFromAlert=async(ip)=>{
-      if(!ip||!ip.includes("."))return;
-      await fetch("/topo/block/host",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ip})});
-      setBlockMsg("Block rule installed for "+ip);setTimeout(()=>setBlockMsg(""),4000);
+    const unblockHost=async(ip)=>{
+      await fetch("/topo/unblock/host",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ip})});
+      setBlockMsg("Unblocked: "+ip);
+      fetch("/topo/blocked/hosts").then(r=>r.json()).then(setBlockedHosts).catch(()=>{});
+      setTimeout(()=>setBlockMsg(""),4000);
     };
+    const dismiss=async id=>{
+      await fetch("/topo/alerts/dismiss",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+      const d=await fetch("/topo/alerts").then(r=>r.json()).catch(()=>[]);
+      setAlerts(d);
+      fetch("/topo/alerts/dismissed").then(r=>r.json()).then(setDismissedAlerts).catch(()=>{});
+    };
+    const clearAll=async()=>{
+      await fetch("/topo/alerts/clear",{method:"POST"});
+      const d=await fetch("/topo/alerts").then(r=>r.json()).catch(()=>[]);
+      setAlerts(d);setUnreadAlerts(0);
+    };
+    const blockFromAlert=async(ip)=>{
+      await fetch("/topo/block/host",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ip})});
+      setBlockMsg("Blocked: "+ip);
+      fetch("/topo/blocked/hosts").then(r=>r.json()).then(setBlockedHosts).catch(()=>{});
+      setTimeout(()=>setBlockMsg(""),4000);
+    };
+
+    // filter active alerts
+    const active=alerts.filter(a=>a.active&&!a.dismissed);
+    const filtered=active.filter(a=>{
+      if(alertSev!=="all"&&a.severity!==alertSev)return false;
+      if(!alertSearch)return true;
+      const q=alertSearch.toLowerCase();
+      return (a.src||"").toLowerCase().includes(q)||(a.dst||"").toLowerCase().includes(q)||
+             (a.type||"").toLowerCase().includes(q)||(a.msg||"").toLowerCase().includes(q)||
+             (a.mitre_id||"").toLowerCase().includes(q);
+    });
+    const sevCounts={critical:active.filter(a=>a.severity==="critical").length,
+                     high:active.filter(a=>a.severity==="high").length,
+                     medium:active.filter(a=>a.severity==="medium").length,
+                     low:active.filter(a=>a.severity==="low").length};
+
+    const SubTab=({id,label,count,color})=>(
+      <button onClick={()=>setAlertSub(id)} style={{...S.btn,
+        background:alertSub===id?color||C.accent:"transparent",
+        color:alertSub===id?"#000":C.muted,
+        border:`1px solid ${alertSub===id?color||C.accent:C.border}`,
+        fontSize:12,padding:"5px 14px"}}>
+        {label}{count>0&&<Badge n={count} color={color||C.accent}/>}
+      </button>
+    );
+
     return(
       <div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
-          <span style={{color:C.text,fontWeight:700,fontSize:14}}>{activeAlerts.length} Active Alerts</span>
-          <div style={{display:"flex",gap:8}}>
-            {blockMsg&&<span style={{color:C.green,fontSize:12}}>{blockMsg}</span>}
-            {activeAlerts.length>0&&<button onClick={clearAll} style={{...S.btn,background:C.red}}>Clear All</button>}
+        {/* sub-tab bar */}
+        <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap",alignItems:"center",borderBottom:`1px solid ${C.border}`,paddingBottom:10}}>
+          <SubTab id="active"    label="Active"    count={active.length}              color={C.red}/>
+          <SubTab id="blocked"   label="Blocked"   count={blockedHosts.length}        color={C.orange}/>
+          <SubTab id="dismissed" label="Dismissed (False Positive)" count={dismissedAlerts.length} color={C.muted}/>
+          <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+            {blockMsg&&<span style={{color:C.green,fontSize:11}}>{blockMsg}</span>}
+            {alertSub==="active"&&active.length>0&&<button onClick={clearAll} style={{...S.btn,background:C.red,fontSize:11}}>Clear All</button>}
           </div>
         </div>
-        {activeAlerts.length===0&&<div style={{color:C.green,textAlign:"center",padding:48,fontSize:14}}>No active alerts — network is clean</div>}
-        {["critical","high","medium","low"].map(sev=>{
-          const sa=activeAlerts.filter(a=>a.severity===sev);if(!sa.length)return null;
-          return<div key={sev} style={{marginBottom:16}}>
-            <div style={{color:SEV[sev],fontWeight:700,fontSize:12,letterSpacing:1,marginBottom:6}}>{sev.toUpperCase()} ({sa.length})</div>
-            {sa.map(a=>(
-              <div key={a.id} style={{...S.card,border:`1px solid ${SEV[a.severity]}40`,marginBottom:8}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:6}}>
-                  <div style={{flex:1}}>
-                    <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                      <span style={{color:SEV[a.severity],fontWeight:700,fontSize:13}}>{a.type.replace(/_/g," ").toUpperCase()}</span>
-                      {a.count>1&&<span style={{...S.pill,background:C.navy,color:C.muted}}>x{a.count}</span>}
-                    </div>
-                    {a.mitre&&<div style={{marginTop:4,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                      <span style={{color:C.purple,fontSize:11,fontWeight:700}}>{a.mitre_id}</span>
-                      <span style={{color:C.muted,fontSize:11}}>{a.mitre_desc}</span>
-                      {a.mitre_url&&<a href={a.mitre_url} target="_blank" rel="noreferrer"
-                        style={{color:C.accent,fontSize:10,textDecoration:"none"}}>MITRE ATT&CK ↗</a>}
-                    </div>}
-                    <div style={{color:C.text,fontSize:12,marginTop:6}}>{a.msg}</div>
-                    <div style={{display:"flex",gap:16,marginTop:4,flexWrap:"wrap",fontSize:11}}>
-                      <span style={{color:C.muted}}>SRC: <span style={{color:C.accent}}>{a.src}</span></span>
-                      <span style={{color:C.muted}}>DST: <span style={{color:C.accent}}>{a.dst}</span></span>
-                      <span style={{color:C.muted}}>{new Date(a.ts*1000).toLocaleTimeString()}</span>
+
+        {/* ── ACTIVE ALERTS sub-tab ── */}
+        {alertSub==="active"&&(
+          <div>
+            {/* search + severity filters */}
+            <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+              <input value={alertSearch} onChange={e=>setAlertSearch(e.target.value)}
+                placeholder="Search IP, type, MITRE..." style={{...S.inp,width:220}}/>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                {["all","critical","high","medium","low"].map(s=>(
+                  <button key={s} onClick={()=>setAlertSev(s)} style={{...S.btn,fontSize:11,padding:"3px 10px",
+                    background:alertSev===s?(SEV[s]||C.accent):"transparent",
+                    color:alertSev===s?"#000":SEV[s]||C.muted,
+                    border:`1px solid ${alertSev===s?(SEV[s]||C.accent):C.border}`}}>
+                    {s.charAt(0).toUpperCase()+s.slice(1)}
+                    {s!=="all"&&sevCounts[s]>0&&<Badge n={sevCounts[s]} color={SEV[s]}/>}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {filtered.length===0&&<div style={{color:C.green,textAlign:"center",padding:48,fontSize:14}}>No alerts match filter</div>}
+            {["critical","high","medium","low"].map(sev=>{
+              const sa=filtered.filter(a=>a.severity===sev);
+              if(!sa.length)return null;
+              return<div key={sev} style={{marginBottom:16}}>
+                <div style={{color:SEV[sev],fontWeight:700,fontSize:12,letterSpacing:1,marginBottom:6,display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{background:SEV[sev]+"25",padding:"2px 10px",borderRadius:4}}>{sev.toUpperCase()}</span>
+                  <span style={{color:C.muted,fontSize:11}}>{sa.length} alert{sa.length!==1?"s":""}</span>
+                </div>
+                {sa.map(a=>(
+                  <div key={a.id} style={{...S.card,border:`1px solid ${SEV[a.severity]}40`,marginBottom:8}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:6}}>
+                      <div style={{flex:1}}>
+                        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                          <span style={{color:SEV[a.severity],fontWeight:700,fontSize:13}}>{a.type.replace(/_/g," ").toUpperCase()}</span>
+                          {a.count>1&&<span style={{...S.pill,background:C.navy,color:C.muted}}>x{a.count}</span>}
+                        </div>
+                        {a.mitre_id&&<div style={{marginTop:4,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                          <span style={{color:C.purple,fontSize:11,fontWeight:700}}>{a.mitre_id}</span>
+                          <span style={{color:C.muted,fontSize:11}}>{a.mitre_desc}</span>
+                          {a.mitre_url&&<a href={a.mitre_url} target="_blank" rel="noreferrer"
+                            style={{color:C.accent,fontSize:10,textDecoration:"none"}}>MITRE ↗</a>}
+                        </div>}
+                        <div style={{color:C.text,fontSize:12,marginTop:6}}>{a.msg}</div>
+                        <div style={{display:"flex",gap:16,marginTop:4,flexWrap:"wrap",fontSize:11}}>
+                          <span style={{color:C.muted}}>SRC: <span style={{color:C.accent}}>{a.src}</span></span>
+                          <span style={{color:C.muted}}>DST: <span style={{color:C.accent}}>{a.dst}</span></span>
+                          <span style={{color:C.muted}}>{new Date(a.ts*1000).toLocaleTimeString()}</span>
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:6,flexShrink:0,alignItems:"flex-start",flexWrap:"wrap"}}>
+                        {a.src&&a.src.includes(".")&&
+                          <button onClick={()=>blockFromAlert(a.src)} style={{...S.btn,padding:"3px 10px",fontSize:11,background:C.red,color:"#fff",fontWeight:700}}>Block</button>}
+                        <button onClick={()=>dismiss(a.id)} style={{...S.btn,padding:"3px 10px",fontSize:11}}>Dismiss</button>
+                      </div>
                     </div>
                   </div>
-                  <div style={{display:"flex",gap:6,flexShrink:0,alignItems:"flex-start"}}>
-                    {a.src&&a.src.includes(".")&&
-                      <button onClick={()=>blockFromAlert(a.src)} style={{...S.btn,padding:"3px 8px",fontSize:10,background:"#3d1414",color:C.red}}>Block</button>}
-                    <button onClick={()=>dismiss(a.id)} style={{...S.btn,padding:"3px 8px",fontSize:10}}>Dismiss</button>
+                ))}
+              </div>;
+            })}
+          </div>
+        )}
+
+        {/* ── BLOCKED sub-tab ── */}
+        {alertSub==="blocked"&&(
+          <div>
+            <div style={{color:C.muted,fontSize:12,marginBottom:12}}>
+              Hosts with active drop rules installed on all switches. Click Unblock to remove the rule.
+            </div>
+            {blockedHosts.length===0&&<div style={{color:C.green,textAlign:"center",padding:48,fontSize:14}}>No hosts currently blocked</div>}
+            {blockedHosts.map((h,i)=>(
+              <div key={i} style={{...S.card,border:`1px solid ${C.orange}40`,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                <div>
+                  <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                    <span style={{...S.pill,background:C.red+"25",color:C.red,fontWeight:700,fontSize:12}}>BLOCKED</span>
+                    <span style={{color:C.text,fontSize:13,fontFamily:"monospace",fontWeight:700}}>{h.ip}</span>
+                    {h.mac&&<span style={{color:C.muted,fontSize:11,fontFamily:"monospace"}}>{h.mac}</span>}
                   </div>
+                  <div style={{display:"flex",gap:16,marginTop:4,fontSize:11}}>
+                    <span style={{color:C.muted}}>Blocked: {new Date(h.ts*1000).toLocaleTimeString()}</span>
+                    <span style={{color:C.muted}}>Switches: {h.switches_affected}</span>
+                  </div>
+                </div>
+                <button onClick={()=>unblockHost(h.ip)}
+                  style={{...S.btn,background:C.green,color:"#000",fontWeight:700,padding:"6px 16px"}}>
+                  Unblock
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── DISMISSED sub-tab ── */}
+        {alertSub==="dismissed"&&(
+          <div>
+            <div style={{color:C.muted,fontSize:12,marginBottom:12}}>
+              Alerts marked as false positives. These are logged to Events for audit purposes.
+            </div>
+            {dismissedAlerts.length===0&&<div style={{color:C.muted,textAlign:"center",padding:48,fontSize:14}}>No dismissed alerts</div>}
+            {[...dismissedAlerts].reverse().map((a,i)=>(
+              <div key={i} style={{...S.card,opacity:.7,marginBottom:6,fontSize:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6}}>
+                  <div>
+                    <span style={{...S.pill,background:SEV[a.severity]+"30",color:SEV[a.severity],marginRight:8}}>{a.severity?.toUpperCase()}</span>
+                    <span style={{color:C.muted,fontWeight:700}}>{a.type?.replace(/_/g," ").toUpperCase()}</span>
+                    {a.mitre_id&&<span style={{color:C.purple,fontSize:11,marginLeft:8}}>{a.mitre_id}</span>}
+                  </div>
+                  <span style={{color:C.muted,fontSize:11}}>Dismissed: {a.dismissed_ts?new Date(a.dismissed_ts*1000).toLocaleTimeString():"-"}</span>
+                </div>
+                <div style={{color:C.muted,marginTop:4}}>{a.msg}</div>
+                <div style={{display:"flex",gap:12,marginTop:3,fontSize:11,color:C.muted}}>
+                  <span>SRC: {a.src}</span><span>DST: {a.dst}</span>
                 </div>
               </div>
             ))}
-          </div>;
-        })}
-        {alerts.filter(a=>!a.active).length>0&&<div>
-          <div style={{color:C.muted,fontSize:11,marginBottom:6,marginTop:8}}>RESOLVED ({alerts.filter(a=>!a.active).length})</div>
-          {alerts.filter(a=>!a.active).slice(-20).map(a=>(
-            <div key={a.id} style={{...S.card,opacity:.45,marginBottom:4,fontSize:11,color:C.muted}}>
-              [{a.severity}] {a.type} — {a.msg}
-            </div>
-          ))}
-        </div>}
+          </div>
+        )}
       </div>
     );
   };
@@ -755,13 +881,40 @@ export default function App(){
     "T1040":  "Passively capturing network traffic or active traceroute probing.",
     "T1030":  "Adversary limits data transfer size to avoid detection thresholds.",
   };
+
   const renderThreats=()=>{
     const byType={};
     alerts.forEach(a=>{if(!byType[a.type])byType[a.type]={type:a.type,total:0,active:0,
       mitre:a.mitre||"",mitre_id:a.mitre_id||"",mitre_desc:a.mitre_desc||"",mitre_url:a.mitre_url||""};
       byType[a.type].total+=a.count;if(a.active)byType[a.type].active++;});
     const typeList=Object.values(byType).sort((a,b)=>b.total-a.total);
-    const threatened=hostIntel.filter(h=>h.threat_score>0).sort((a,b)=>b.threat_score-a.threat_score);
+
+    // search filter
+    const tq=threatSearch.toLowerCase();
+    const threatened=hostIntel
+      .filter(h=>h.threat_score>0)
+      .filter(h=>{
+        if(!tq)return true;
+        return (h.ip||"").includes(tq)||(h.mac||"").toLowerCase().includes(tq)||
+               (h.protocols||[]).some(p=>p.toLowerCase().includes(tq))||
+               String(h.threat_score).includes(tq);
+      })
+      .sort((a,b)=>b.threat_score-a.threat_score);
+
+    const blockHost=async(ip,mac)=>{
+      await fetch("/topo/block/host",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ip,mac})});
+      setBlockMsg("Blocked: "+ip);
+      fetch("/topo/blocked/hosts").then(r=>r.json()).then(setBlockedHosts).catch(()=>{});
+      setTimeout(()=>setBlockMsg(""),4000);
+    };
+    const unblockHost=async(ip)=>{
+      await fetch("/topo/unblock/host",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ip})});
+      setBlockMsg("Unblocked: "+ip);
+      fetch("/topo/blocked/hosts").then(r=>r.json()).then(setBlockedHosts).catch(()=>{});
+      setTimeout(()=>setBlockMsg(""),4000);
+    };
+    const isBlocked=ip=>blockedHosts.some(b=>b.ip===ip);
+
     return(
       <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
         <div style={{flex:1,minWidth:300,...S.col}}>
@@ -796,7 +949,7 @@ export default function App(){
               {Array.isArray(alertTimeline)&&alertTimeline.slice(-100).reverse().map((a,i)=>(
                 <div key={i} title={`${a.type||""} @ ${a.ts?new Date(a.ts*1000).toLocaleTimeString():""}`}
                   style={{width:10,height:10,borderRadius:2,background:SEV[a.severity]||C.muted,cursor:"pointer"}}
-                  onClick={()=>{const al=alerts.find(x=>Math.abs(x.ts-(a.ts||0))<1&&x.type===a.type);if(al)setTab("ALERTS");}}/>
+                  onClick={()=>setTab("ALERTS")}/>
               ))}
               {(!alertTimeline||alertTimeline.length===0)&&<div style={{color:C.muted,fontSize:11}}>No alert history</div>}
             </div>
@@ -809,40 +962,51 @@ export default function App(){
             </div>
           </div>
         </div>
-        <div style={{flex:"0 0 280px",...S.col}}>
+        <div style={{flex:"0 0 320px",...S.col}}>
           <div style={S.card}>
-            <div style={S.title}>Host Threat Scores</div>
-            {threatened.slice(0,10).map(h=>(
+            {/* search bar + block input on same row */}
+            <div style={{display:"flex",gap:6,marginBottom:10,alignItems:"center",flexWrap:"wrap"}}>
+              <input value={threatSearch} onChange={e=>setThreatSearch(e.target.value)}
+                placeholder="Search IP, MAC, protocol..." style={{...S.inp,flex:1,minWidth:130}}/>
+              <input value={blockIp} onChange={e=>setBlockIp(e.target.value)}
+                placeholder="IP to block..." style={{...S.inp,flex:1,minWidth:110}}/>
+              <button onClick={()=>{if(blockIp)blockHost(blockIp,"");}}
+                style={{...S.btn,background:C.red,color:"#fff",fontWeight:700,padding:"5px 12px",whiteSpace:"nowrap"}}>
+                Block IP
+              </button>
+            </div>
+            {blockMsg&&<div style={{color:C.green,fontSize:11,marginBottom:8}}>{blockMsg}</div>}
+            <div style={S.title}>Host Threat Scores <span style={{color:C.muted,fontWeight:400}}>({threatened.length} hosts)</span></div>
+            {threatened.slice(0,15).map(h=>{
+              const blocked=isBlocked(h.ip);
+              return(
               <div key={h.mac} style={{borderBottom:`1px solid ${C.border}`,padding:"8px 0"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div>
-                    <div style={{color:C.text,fontSize:12,fontFamily:"monospace"}}>{h.ip||h.mac}</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                      <span style={{color:C.text,fontSize:12,fontFamily:"monospace"}}>{h.ip||h.mac}</span>
+                      {blocked&&<Pill label="BLOCKED" color={C.red}/>}
+                    </div>
                     <div style={{color:C.muted,fontSize:10}}>{h.dpid?.slice(-8)} p{h.port}</div>
                   </div>
-                  <div style={{textAlign:"right"}}>
+                  <div style={{textAlign:"right",flexShrink:0}}>
                     <div style={{color:h.threat_score>60?C.red:h.threat_score>30?C.orange:C.yellow,fontSize:20,fontWeight:800}}>{h.threat_score}</div>
                     <div style={{color:C.muted,fontSize:10}}>{h.alert_count} alerts</div>
                   </div>
                 </div>
-                <Bar value={h.threat_score} max={100} color={h.threat_score>60?C.red:h.threat_score>30?C.orange:C.yellow} height={4}/>
-                <div style={{display:"flex",gap:3,marginTop:4,flexWrap:"wrap"}}>
-                  {(h.protocols||[]).map(p=><Pill key={p} label={p.toUpperCase()} color={PROTO[p]}/>)}
+                <Bar value={h.threat_score} max={100} color={h.threat_score>60?C.red:h.threat_score>30?C.orange:C.yellow}/>
+                <div style={{display:"flex",gap:3,marginTop:4,flexWrap:"wrap",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                    {(h.protocols||[]).map(p=><Pill key={p} label={p.toUpperCase()} color={PROTO[p]}/>)}
+                  </div>
+                  {blocked
+                    ?<button onClick={()=>unblockHost(h.ip)} style={{...S.btn,padding:"2px 8px",fontSize:10,background:C.green,color:"#000"}}>Unblock</button>
+                    :<button onClick={()=>blockHost(h.ip,h.mac)} style={{...S.btn,padding:"2px 8px",fontSize:10,background:C.red,color:"#fff"}}>Block</button>
+                  }
                 </div>
               </div>
-            ))}
+            );})}
             {threatened.length===0&&<div style={{color:C.green,fontSize:12,textAlign:"center",padding:16}}>All hosts clean</div>}
-          </div>
-          <div style={S.card}>
-            <div style={S.title}>Block a Host (Drop Rule)</div>
-            <input placeholder="IP to block (e.g. 10.0.0.1)" value={blockIp} onChange={e=>setBlockIp(e.target.value)} style={{...S.inp,width:"100%",boxSizing:"border-box",marginBottom:8}}/>
-            <button onClick={async()=>{
-              if(!blockIp)return;
-              const r=await fetch("/topo/block/host",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ip:blockIp})});
-              const d=await r.json();
-              setBlockMsg(d.ok?`Blocked on ${d.switches_affected} switches`:"Error: "+(d.error||"?"));
-              setTimeout(()=>setBlockMsg(""),4000);
-            }} style={{...S.btn,background:C.red,width:"100%"}}>Install Drop Rule</button>
-            {blockMsg&&<div style={{color:C.green,fontSize:12,marginTop:6}}>{blockMsg}</div>}
           </div>
         </div>
       </div>
@@ -852,7 +1016,7 @@ export default function App(){
   // ── TAB: PACKETS ─────────────────────────────────────────────────────────────
   const renderPackets=()=>{
     const total=pktStats.total||1;
-    const protos=["arp","icmp","tcp","udp","other"];
+    const protos=["arp","icmp","tcp","udp","http","https","dns","ssh","dhcp","ftp","openflow","other"];
     const displayPkts=filteredPkts.slice(-pktPageSize).reverse();
     return(
       <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
