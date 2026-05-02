@@ -33,7 +33,7 @@ A live browser-based SDN monitoring dashboard built from scratch with **POX Open
 > Add your screenshots here after taking them with the dashboard running.
 
 — Dashboard with live KPIs
-https://github.com/Khaledak74/SDN_Topology_Visualizer/blob/main/docs/screenshots/Dashboard.png
+![Dashboard Screenshot](docs/screenshots/Dashboard.png)
 — Topology map with switches and hosts
 docs/screenshots/Topo.png     
 — Alerts tab showing severity groups
