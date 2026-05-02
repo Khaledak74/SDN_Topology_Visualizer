@@ -43,7 +43,7 @@ A live browser-based SDN monitoring dashboard built from scratch with **POX Open
 ![Threats Screenshot](docs/screenshots/Threats.png)
 
 — A Wireshark style sheet  
-![Packets Screenshot](docs/screenshots/all packets.png)
+![Packets Screenshot](docs/screenshots/all_packets.png)
 
 — TCP/UDP communications sessions  
 ![Sessions Screenshot](docs/screenshots/Sessions.png)
