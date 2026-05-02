@@ -30,22 +30,25 @@ A live browser-based SDN monitoring dashboard built from scratch with **POX Open
 
 ## Screenshots
 
-> Add your screenshots here after taking them with the dashboard running.
-
 — Dashboard with live KPIs
 ![Dashboard Screenshot](docs/screenshots/Dashboard.png)
-— Topology map with switches and hosts
-docs/screenshots/Topo.png     
-— Alerts tab showing severity groups
-docs/screenshots/Alerts.png       
-— Threats tab showing detected threats tybe
-docs/screenshots/Threats.png      
-— A Wiresharke style sheet 
-docs/screenshots/all packets.png    
-— TCP/UDP communications sessions
-docs/screenshots/Sessions.png     
-— Isolate and Restore hosts, Clear all Alerts and QOS limit
-docs/screenshots/PlayBook.png     
+— Topology map with switches and hosts  
+![Topology Screenshot](docs/screenshots/Topo.png)
+
+— Alerts tab showing severity groups  
+![Alerts Screenshot](docs/screenshots/Alerts.png)
+
+— Threats tab showing detected threats type  
+![Threats Screenshot](docs/screenshots/Threats.png)
+
+— A Wireshark style sheet  
+![Packets Screenshot](docs/screenshots/all packets.png)
+
+— TCP/UDP communications sessions  
+![Sessions Screenshot](docs/screenshots/Sessions.png)
+
+— Isolate and Restore hosts, Clear all Alerts and QoS limit  
+![Playbook Screenshot](docs/screenshots/PlayBook.png)  
 
 
 
