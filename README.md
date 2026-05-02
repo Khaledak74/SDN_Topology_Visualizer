@@ -125,18 +125,18 @@ Port-based detection happens automatically on every packet — no configuration 
 
 ```
 Mininet virtual network  (OVS switches + Linux hosts)
-        |
-        |  OpenFlow 1.0 packets
-        v
+                      |
+             OpenFlow 1.0 packets
+       
 POX 0.3.0 controller  +  topology_api.py  (~1,100 lines)
-        |
-        |  REST API  — ~30 endpoints on port 8000
-        v
+                     |
+        REST API  — ~30 endpoints on port 8000
+                     |
 React.js 18 dashboard  (App.js ~2,900 lines)
-        |
-        |  HTTP polling every 1–5 seconds
-        v
-Browser at http://localhost:3000
+                     |
+         HTTP polling every 1–5 seconds
+                     |
+        Browser at http://localhost:3000
 ```
 
 The React app proxies all `/topo/` requests to port 8000 via the `proxy` setting in `package.json`.
@@ -186,10 +186,14 @@ cp controller/topology_api.py ~/pox/pox/topology_api.py
 
 ### 5. Install Node.js via nvm
 ```bash
+sudo apt install curl
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
 source ~/.bashrc
+sudo chown $USER:USER /home/"machine_name"/.nvm
 nvm install 20
 nvm use 20
+node --version    > v20.0.0
+npm --version     > v10.0.0
 ```
 
 ### 6. Install React dependencies
