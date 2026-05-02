@@ -1,9 +1,9 @@
-// App.js  —  SDN Topology Visualizer  v3  (Full Monitoring Suite)
+// App.js  --  SDN Topology Visualizer  v3  (Full Monitoring Suite)
 // 15 tabs: DASHBOARD · TOPOLOGY · ALERTS · THREATS · PACKETS
 //          SESSIONS · HOSTS · FLOWS · QoS · GRAPHS · TESTS · CMDLOG · REPORTS · EXPORT
 import { useState, useEffect, useRef, useCallback } from "react";
 
-// ── palette ──────────────────────────────────────────────────────────────────
+// -- palette ------------------------------------------------------------------
 const C={
   bg:"#0d1117",panel:"#161b22",border:"#30363d",text:"#e6edf3",
   muted:"#8b949e",accent:"#58a6ff",green:"#3fb950",orange:"#f0883e",
@@ -15,7 +15,7 @@ const PROTO={arp:"#bc8cff",icmp:"#3fb950",tcp:"#58a6ff",udp:"#f0883e",http:"#e87
 const STABLE=4;
 const SVG_W=920, SVG_H=580;
 
-// ── formatters ────────────────────────────────────────────────────────────────
+// -- formatters ----------------------------------------------------------------
 const fB=b=>b>1e9?(b/1e9).toFixed(2)+"GB/s":b>1e6?(b/1e6).toFixed(2)+"MB/s":b>1e3?(b/1e3).toFixed(1)+"KB/s":b+"B/s";
 const fS=b=>b>1e9?(b/1e9).toFixed(2)+" GB":b>1e6?(b/1e6).toFixed(2)+" MB":b>1e3?(b/1e3).toFixed(1)+" KB":b+" B";
 const fT=ts=>{const d=new Date(ts*1000);return d.toTimeString().slice(0,8)+"."+String(d.getMilliseconds()).padStart(3,"0");};
@@ -23,12 +23,12 @@ const fAge=s=>{if(!s||s<1)return"0s";if(s<60)return s+"s";if(s<3600)return Math.
 const nId=(a,b)=>[a,b].sort().join("||");
 const pct=(v,mx)=>Math.min(100,mx?Math.round(v/mx*100):0);
 
-// ── shared styles ─────────────────────────────────────────────────────────────
+// -- shared styles -------------------------------------------------------------
 const S={
-  card:{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:12},
+  card:{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:0,transition:"box-shadow .2s"},
   title:{color:C.muted,fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase",
     marginBottom:8,paddingBottom:6,borderBottom:`1px solid ${C.border}`},
-  btn:{background:C.navy,color:C.text,border:"none",borderRadius:6,padding:"6px 14px",
+  btn:{background:C.navy,color:C.text,border:"none",borderRadius:8,padding:"6px 14px",
     fontSize:12,cursor:"pointer",fontFamily:"inherit"},
   inp:{background:C.dark,color:C.text,border:`1px solid ${C.border}`,borderRadius:6,
     padding:"5px 10px",fontSize:12,fontFamily:"monospace",outline:"none"},
@@ -37,7 +37,7 @@ const S={
   col:{display:"flex",flexDirection:"column",gap:8},
 };
 
-// ── micro components ─────────────────────────────────────────────────────────
+// -- micro components ---------------------------------------------------------
 function Badge({n,color=C.red}){
   if(!n||n<1)return null;
   return<span style={{background:color,color:"#fff",borderRadius:10,fontSize:10,fontWeight:700,
@@ -71,7 +71,7 @@ function SparkLine({data,color,height=40,width=150}){
   </svg>;
 }
 
-// ── Main App ──────────────────────────────────────────────────────────────────
+// -- Main App ------------------------------------------------------------------
 export default function App(){
   // topology
   const [raw,setRaw]=useState({switches:[],links:[],hosts:[]});
@@ -105,6 +105,9 @@ export default function App(){
   const [pan,setPan]=useState({x:0,y:0});
   const [isPanning,setIsPanning]=useState(false);
   const panStart=useRef(null);
+  const dragNode=useRef(null);
+  const [dragMode,setDragMode]=useState(false);
+  const [customPos,setCustomPos]=useState({});
   const [pathMode,setPathMode]=useState(false);
   const [pathSrc,setPathSrc]=useState(null);
   const [activePath,setActivePath]=useState([]);
@@ -135,6 +138,18 @@ export default function App(){
   const [testHistory,setTestHistory]=useState([]);
   const [simSel,setSimSel]=useState(null);
   const [cidr,setCidr]=useState("10.0.0.0/24");
+  const [playbookSel,setPlaybookSel]=useState(null);
+  const [playbookLog,setPlaybookLog]=useState([]);
+  const [pbVals,setPbVals]=useState({});
+  const [pbRunning,setPbRunning]=useState(false);
+  const [pbDone,setPbDone]=useState(false);
+  const [rtFilter,setRtFilter]=useState("all");
+  const [sidebarOpen,setSidebarOpen]=useState(true);
+  const [navGroup,setNavGroup]=useState("monitor");
+  const [toast,setToast]=useState(null);
+  const [quickStats,setQuickStats]=useState(true);
+  const [settingsOpen,setSettingsOpen]=useState(false);
+
   const [calcResult,setCalcResult]=useState(null);
   // reports
   const [reportRange,setReportRange]=useState(3600);
@@ -164,8 +179,12 @@ export default function App(){
   const prevNodeRef=useRef("");
   const lastAlertRef=useRef(0);
   const lastCmdRef=useRef(0);
+  const showToast=(msg,type="info")=>{
+    setToast({msg,type,id:Date.now()});
+    setTimeout(()=>setToast(null),3500);
+  };
 
-  // ── layout calc ─────────────────────────────────────────────────────────────
+  // -- layout calc -------------------------------------------------------------
   const buildLayout=useCallback((sws,lks,hosts)=>{
     const pos={};
     if(!sws.length)return pos;
@@ -194,12 +213,12 @@ export default function App(){
     return pos;
   },[]);
 
-  // ── API helper ───────────────────────────────────────────────────────────────
+  // -- API helper ---------------------------------------------------------------
   const api=async(url,setter,transform)=>{
     try{const r=await fetch(url);if(r.ok){const d=await r.json();setter(transform?transform(d):d);}}catch(_){}
   };
 
-  // ── incremental packet fetch (never loses data) ──────────────────────────────
+  // -- incremental packet fetch (never loses data) ------------------------------
   const fetchPackets=useCallback(async()=>{
     if(pktPaused)return;
     try{
@@ -216,8 +235,8 @@ export default function App(){
     }catch(_){}
   },[pktPaused,lastPktId]);
 
-  // ── topology poll ────────────────────────────────────────────────────────────
-  // ── SVG capture effect (saves topology for export from any tab) ─────────────
+  // -- topology poll ------------------------------------------------------------
+  // -- SVG capture effect (saves topology for export from any tab) -------------
   useEffect(()=>{
     if(tab!=="TOPOLOGY")return;
     const timer=setTimeout(()=>{
@@ -277,7 +296,7 @@ export default function App(){
     }catch(_){}
   },[]);
 
-  // ── main poll loop ────────────────────────────────────────────────────────────
+  // -- main poll loop ------------------------------------------------------------
   useEffect(()=>{
     pollTopo();pollAlerts();pollCmdlog();
     api("/topo/summary",setSummary);
@@ -314,11 +333,18 @@ export default function App(){
     const nk=(raw.switches||[]).map(s=>s.dpid).join(",")+"|"+(raw.hosts||[]).map(h=>h.mac).join(",");
     if(nk!==prevNodeRef.current){
       prevNodeRef.current=nk;
-      Object.assign(posRef.current,buildLayout(raw.switches||[],raw.links||[],raw.hosts||[]));
+      const newLayout=buildLayout(raw.switches||[],raw.links||[],raw.hosts||[]);
+      // preserve custom user-dragged positions
+      setCustomPos(prev=>{
+        const merged={...newLayout};
+        Object.keys(prev).forEach(id=>{if(merged[id])merged[id]=prev[id];});
+        Object.assign(posRef.current,merged);
+        return prev;
+      });
     }
   },[raw,buildLayout]);
 
-  // ── BFS path ─────────────────────────────────────────────────────────────────
+  // -- BFS path -----------------------------------------------------------------
   const bfsPath=(src,dst)=>{
     const adj={};
     [...(raw.switches||[]).map(s=>s.dpid),...(raw.hosts||[]).map(h=>h.mac)].forEach(n=>{adj[n]=new Set();});
@@ -340,7 +366,7 @@ export default function App(){
     return[];
   };
 
-  // ── derived values ────────────────────────────────────────────────────────────
+  // -- derived values ------------------------------------------------------------
   const swBwTotal={};
   Object.entries(bw).forEach(([d,ports])=>{
     swBwTotal[d]=Object.values(ports).reduce((s,v)=>s+v.rate_tx+v.rate_rx,0);
@@ -351,7 +377,7 @@ export default function App(){
   const edges=[...(raw.links||[]),...Object.values(downRef.current)];
   const activeAlerts=alerts.filter(a=>a.active);
 
-  // ── filtered packets ─────────────────────────────────────────────────────────
+  // -- filtered packets ---------------------------------------------------------
   const filteredPkts=allPackets.filter(p=>{
     if(pktFilter.proto&&p.proto!==pktFilter.proto)return false;
     if(pktFilter.search){
@@ -364,27 +390,63 @@ export default function App(){
     return true;
   });
 
-  // ── zoom/pan handlers ────────────────────────────────────────────────────────
+  // -- zoom/pan handlers --------------------------------------------------------
   const onWheel=e=>{
     e.preventDefault();
     setZoom(z=>Math.max(0.3,Math.min(3,z-(e.deltaY*0.001))));
   };
+  // -- SVG coordinate conversion --------------------------------------------
+  const svgCoords=(e)=>{
+    const rect=svgContainerRef.current?.getBoundingClientRect();
+    if(!rect)return{x:0,y:0};
+    return{
+      x:(e.clientX-rect.left-pan.x)/zoom,
+      y:(e.clientY-rect.top -pan.y)/zoom
+    };
+  };
+
   const onMouseDown=e=>{
+    // middle click or alt+left = pan always
     if(e.button===1||(e.button===0&&e.altKey)){
+      setIsPanning(true);
+      panStart.current={x:e.clientX-pan.x,y:e.clientY-pan.y};
+      return;
+    }
+    // in pan mode and left click on canvas background = pan
+    if(!dragMode&&e.button===0){
       setIsPanning(true);
       panStart.current={x:e.clientX-pan.x,y:e.clientY-pan.y};
     }
   };
+  const onNodeMouseDown=(e,id)=>{
+    if(!dragMode)return; // only drag when drag mode is on
+    e.stopPropagation();
+    const{x,y}=svgCoords(e);
+    const cur=posRef.current[id]||{x:0,y:0};
+    dragNode.current={id,offsetX:x-cur.x,offsetY:y-cur.y};
+  };
   const onMouseMove=e=>{
+    if(dragNode.current){
+      const{x,y}=svgCoords(e);
+      const{id,offsetX,offsetY}=dragNode.current;
+      const nx=x-offsetX, ny=y-offsetY;
+      posRef.current[id]={x:nx,y:ny};
+      setCustomPos(p=>({...p,[id]:{x:nx,y:ny}}));
+      return;
+    }
     if(isPanning&&panStart.current){
       setPan({x:e.clientX-panStart.current.x,y:e.clientY-panStart.current.y});
     }
   };
-  const onMouseUp=()=>{setIsPanning(false);panStart.current=null;};
+  const onMouseUp=()=>{
+    dragNode.current=null;
+    setIsPanning(false);
+    panStart.current=null;
+  };
 
-  // ──────────────────────────────────────────────────────────────────────────────
+  // ------------------------------------------------------------------------------
   // TAB: TOPOLOGY canvas
-  // ──────────────────────────────────────────────────────────────────────────────
+  // ------------------------------------------------------------------------------
   const handleNodeClick=id=>{
     if(pathMode){
       if(!pathSrc){setPathSrc(id);return;}
@@ -400,7 +462,7 @@ export default function App(){
     [...sw].sort((a,b)=>a.dpid.localeCompare(b.dpid)).forEach((s,i)=>{swNums[s.dpid]=i+1;});
     return(
       <div ref={svgContainerRef} style={{overflow:"hidden",borderRadius:8,border:`1px solid ${C.border}`,background:C.bg,cursor:isPanning?"grabbing":"default",userSelect:"none"}}
-        onWheel={onWheel} onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
+        onWheel={onWheel} onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp} style={{cursor:dragMode?"default":isPanning?"grabbing":"grab"}}>
         <svg ref={svgRef} width={SVG_W} height={SVG_H} style={{display:"block",transform:`scale(${zoom}) translate(${pan.x/zoom}px,${pan.y/zoom}px)`,transformOrigin:"0 0",transition:isPanning?"none":"transform .1s"}}>
           <defs>
             <filter id="glow"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
@@ -410,11 +472,11 @@ export default function App(){
           {["CORE","AGGREGATION","ACCESS","HOSTS"].map((l,i)=>(
             <text key={l} x={10} y={[95,225,365,495][i]} fontSize={8} fill={C.muted} fontFamily="monospace" opacity={.4}>{l}</text>
           ))}
-          {/* host—switch lines */}
+          {/* host--switch lines */}
           {hosts.map((h,i)=>{const a=pos[h.mac],b=pos[h.dpid];if(!a||!b)return null;
             return<line key={"hl"+i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={C.border} strokeWidth={1} opacity={.4}/>;
           })}
-          {/* switch—switch links */}
+          {/* switch--switch links */}
           {edges.map((l,i)=>{
             const a=pos[l.src_dpid],b=pos[l.dst_dpid];if(!a||!b)return null;
             const isDown=l.status==="down";
@@ -441,7 +503,7 @@ export default function App(){
             const hc=heatColor(s.dpid);
             const isSel=selected===s.dpid||selected?.dpid===s.dpid;
             const num=swNums[s.dpid]||"?";
-            return(<g key={s.dpid} style={{cursor:"pointer"}} onClick={()=>handleNodeClick(s.dpid)}>
+            return(<g key={s.dpid} style={{cursor:dragMode?"grab":"pointer"}} onMouseDown={e=>onNodeMouseDown(e,s.dpid)} onClick={()=>handleNodeClick(s.dpid)}>
               {isSel&&<rect x={p.x-28} y={p.y-22} width={56} height={44} rx={8} fill="none" stroke={C.accent} strokeWidth={2}/>}
               <rect x={p.x-22} y={p.y-16} width={44} height={32} rx={5} fill={C.navy} stroke={hc} strokeWidth={2}/>
               <text x={p.x} y={p.y-2} textAnchor="middle" fontSize={10} fill={C.text} fontFamily="monospace" fontWeight={700}>s{num}</text>
@@ -458,7 +520,7 @@ export default function App(){
             const tc=ts>60?C.red:ts>30?C.orange:ts>10?C.yellow:C.green;
             const ip=h.ipAddresses?.[0]||"";
             const label=ip?ip.split(".").slice(-2).join("."):h.mac.slice(-5);
-            return(<g key={h.mac} style={{cursor:"pointer"}} onClick={()=>handleNodeClick(h.mac)}>
+            return(<g key={h.mac} style={{cursor:dragMode?"grab":"pointer"}} onMouseDown={e=>onNodeMouseDown(e,h.mac)} onClick={()=>handleNodeClick(h.mac)}>
               {isSel&&<circle cx={p.x} cy={p.y} r={18} fill="none" stroke={C.accent} strokeWidth={2}/>}
               {ts>30&&<circle cx={p.x} cy={p.y} r={14} fill={tc} opacity={.15} filter="url(#glow)"/>}
               <circle cx={p.x} cy={p.y} r={11} fill={C.dark} stroke={tc} strokeWidth={1.5}/>
@@ -472,7 +534,7 @@ export default function App(){
     );
   };
 
-  // ── TAB: TOPOLOGY ──────────────────────────────────────────────────────────
+  // -- TAB: TOPOLOGY ----------------------------------------------------------
   const renderTopo=()=>{
     const downCount=Object.keys(downRef.current).length;
     const swNums={};
@@ -486,6 +548,10 @@ export default function App(){
             <button onClick={()=>setZoom(z=>Math.min(3,z+0.2))} style={{...S.btn,padding:"4px 12px",fontSize:14}}>+</button>
             <button onClick={()=>setZoom(z=>Math.max(0.3,z-0.2))} style={{...S.btn,padding:"4px 12px",fontSize:14}}>-</button>
             <button onClick={()=>{setZoom(1);setPan({x:0,y:0});}} style={{...S.btn,fontSize:11}}>Reset View</button>
+            <button onClick={()=>{setCustomPos({});Object.assign(posRef.current,buildLayout(raw.switches||[],raw.links||[],raw.hosts||[]));}} style={{...S.btn,fontSize:11}}>Reset Layout</button>
+            <button onClick={()=>setDragMode(m=>!m)} style={{...S.btn,fontSize:11,background:dragMode?C.accent:"transparent",color:dragMode?"#000":C.muted,border:`1px solid ${dragMode?C.accent:C.border}`}}>
+              {dragMode?"Drag ON -- click to pan":"Drag OFF -- click to drag"}
+            </button>
             <span style={{color:C.muted,fontSize:11}}>{Math.round(zoom*100)}%  (scroll/alt+drag to zoom/pan)</span>
             <button onClick={()=>{setPathMode(m=>!m);setPathSrc(null);setActivePath([]);}}
               style={{...S.btn,background:pathMode?C.yellow:C.navy,color:pathMode?"#000":C.text}}>
@@ -526,11 +592,11 @@ export default function App(){
             ))}
           </div>
           {activePath.length>0&&<div style={{...S.card,border:`1px solid ${C.yellow}`}}>
-            <div style={{...S.title,color:C.yellow}}>Path — {activePath.length-1} hops</div>
+            <div style={{...S.title,color:C.yellow}}>Path -- {activePath.length-1} hops</div>
             <div style={{fontSize:11,lineHeight:1.8}}>
               {activePath.map((n,i)=><span key={i}>
                 <span style={{color:C.text,fontFamily:"monospace"}}>{swNums[n]?"s"+swNums[n]:n.slice(-8)}</span>
-                {i<activePath.length-1&&<span style={{color:C.yellow}}> → </span>}
+                {i<activePath.length-1&&<span style={{color:C.yellow}}>  ->  </span>}
               </span>)}
             </div>
           </div>}
@@ -557,7 +623,7 @@ export default function App(){
     );
   };
 
-  // ── TAB: DASHBOARD ─────────────────────────────────────────────────────────
+  // -- TAB: DASHBOARD ---------------------------------------------------------
   const renderDashboard=()=>{
     const s=summary||{};const al=s.alerts||{};
     const protos=["arp","icmp","tcp","udp","http","https","dns","ssh","dhcp","ftp","openflow","other"];
@@ -578,6 +644,34 @@ export default function App(){
           <KPI label="PKT-IN (ctrl)" value={(s.ctrl_packetin||0).toLocaleString()} color={C.teal}/>
           <KPI label="Uptime" value={fAge(s.uptime||0)} color={C.muted}/>
         </div>
+        {/* Network Health Score */}
+        {(()=>{
+          const threats=hostIntel.filter(h=>h.threat_score>50).length;
+          const crits=activeAlerts.filter(a=>a.severity==="critical").length;
+          const score=Math.max(0,Math.min(100,100-crits*20-threats*10-activeAlerts.length*2));
+          const col=score>75?C.green:score>40?C.orange:C.red;
+          const label=score>75?"Healthy":score>40?"Degraded":"Critical";
+          return<div style={{...S.card,marginBottom:10,display:"flex",alignItems:"center",gap:14,padding:"10px 18px"}}>
+            <div style={{flex:1}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                <span style={{color:C.text,fontSize:12,fontWeight:700}}>&#127760; Network Health Score</span>
+                <span style={{color:col,fontWeight:800,fontSize:12,padding:"2px 10px",borderRadius:6,background:col+"22",border:`1px solid ${col}44`}}>{label}</span>
+              </div>
+              <div style={{height:8,borderRadius:4,background:C.border}}>
+                <div style={{height:8,borderRadius:4,width:score+"%",background:`linear-gradient(90deg,${col},${col}88)`,transition:"width 1.2s ease",boxShadow:`0 0 8px ${col}55`}}/>
+              </div>
+              <div style={{display:"flex",gap:16,marginTop:5,fontSize:10,color:C.muted}}>
+                <span>Critical alerts: <b style={{color:crits>0?C.red:C.green}}>{crits}</b></span>
+                <span>High threats: <b style={{color:threats>0?C.orange:C.green}}>{threats}</b></span>
+                <span>Total alerts: <b style={{color:C.yellow}}>{activeAlerts.length}</b></span>
+              </div>
+            </div>
+            <div style={{textAlign:"center",flexShrink:0}}>
+              <div style={{color:col,fontWeight:900,fontSize:32,fontFamily:"monospace",lineHeight:1}}>{score}</div>
+              <div style={{color:C.muted,fontSize:9,marginTop:2}}>/ 100</div>
+            </div>
+          </div>;
+        })()}
         <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
           <div style={{...S.card,flex:"0 0 210px"}}>
             <div style={S.title}>Protocol Mix</div>
@@ -641,7 +735,7 @@ export default function App(){
             <div style={S.title}>Top Talkers</div>
             {talkers.slice(0,8).map((t,i)=>(
               <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",borderBottom:`1px solid ${C.border}15`,fontSize:11}}>
-                <span style={{color:C.accent,fontFamily:"monospace",flex:1,overflow:"hidden",textOverflow:"ellipsis"}}>{t.src}<span style={{color:C.muted}}> → </span>{t.dst}</span>
+                <span style={{color:C.accent,fontFamily:"monospace",flex:1,overflow:"hidden",textOverflow:"ellipsis"}}>{t.src}<span style={{color:C.muted}}>  ->  </span>{t.dst}</span>
                 <span style={{color:C.muted,flexShrink:0,marginLeft:6}}>{fS(t.bytes)}</span>
               </div>
             ))}
@@ -685,11 +779,11 @@ export default function App(){
     );
   };
 
-  // ── TAB: ALERTS ─────────────────────────────────────────────────────────────
+  // -- TAB: ALERTS -------------------------------------------------------------
   const renderAlerts=()=>{
     const unblockHost=async(ip)=>{
       await fetch("/topo/unblock/host",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ip})});
-      setBlockMsg("Unblocked: "+ip);
+      setBlockMsg("Unblocked: "+ip);showToast("Host "+ip+" unblocked","success");
       fetch("/topo/blocked/hosts").then(r=>r.json()).then(setBlockedHosts).catch(()=>{});
       setTimeout(()=>setBlockMsg(""),4000);
     };
@@ -706,7 +800,7 @@ export default function App(){
     };
     const blockFromAlert=async(ip)=>{
       await fetch("/topo/block/host",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ip})});
-      setBlockMsg("Blocked: "+ip);
+      setBlockMsg("Blocked: "+ip);showToast("Host "+ip+" blocked on all switches","warn");
       fetch("/topo/blocked/hosts").then(r=>r.json()).then(setBlockedHosts).catch(()=>{});
       setTimeout(()=>setBlockMsg(""),4000);
     };
@@ -749,7 +843,7 @@ export default function App(){
           </div>
         </div>
 
-        {/* ── ACTIVE ALERTS sub-tab ── */}
+        {/* -- ACTIVE ALERTS sub-tab -- */}
         {alertSub==="active"&&(
           <div>
             {/* search + severity filters */}
@@ -789,7 +883,7 @@ export default function App(){
                           <span style={{color:C.purple,fontSize:11,fontWeight:700}}>{a.mitre_id}</span>
                           <span style={{color:C.muted,fontSize:11}}>{a.mitre_desc}</span>
                           {a.mitre_url&&<a href={a.mitre_url} target="_blank" rel="noreferrer"
-                            style={{color:C.accent,fontSize:10,textDecoration:"none"}}>MITRE ↗</a>}
+                            style={{color:C.accent,fontSize:10,textDecoration:"none"}}>MITRE [ext]</a>}
                         </div>}
                         <div style={{color:C.text,fontSize:12,marginTop:6}}>{a.msg}</div>
                         <div style={{display:"flex",gap:16,marginTop:4,flexWrap:"wrap",fontSize:11}}>
@@ -811,7 +905,7 @@ export default function App(){
           </div>
         )}
 
-        {/* ── BLOCKED sub-tab ── */}
+        {/* -- BLOCKED sub-tab -- */}
         {alertSub==="blocked"&&(
           <div>
             <div style={{color:C.muted,fontSize:12,marginBottom:12}}>
@@ -840,7 +934,7 @@ export default function App(){
           </div>
         )}
 
-        {/* ── DISMISSED sub-tab ── */}
+        {/* -- DISMISSED sub-tab -- */}
         {alertSub==="dismissed"&&(
           <div>
             <div style={{color:C.muted,fontSize:12,marginBottom:12}}>
@@ -869,7 +963,7 @@ export default function App(){
     );
   };
 
-  // ── TAB: THREATS ─────────────────────────────────────────────────────────────
+  // -- TAB: THREATS -------------------------------------------------------------
   const MITRE_DESCRIPTIONS={
     "T1046":  "The attacker discovers services running on remote hosts by probing ports.",
     "T1498":  "The attacker overwhelms network infrastructure with flood traffic.",
@@ -903,13 +997,13 @@ export default function App(){
 
     const blockHost=async(ip,mac)=>{
       await fetch("/topo/block/host",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ip,mac})});
-      setBlockMsg("Blocked: "+ip);
+      setBlockMsg("Blocked: "+ip);showToast("Host "+ip+" blocked on all switches","warn");
       fetch("/topo/blocked/hosts").then(r=>r.json()).then(setBlockedHosts).catch(()=>{});
       setTimeout(()=>setBlockMsg(""),4000);
     };
     const unblockHost=async(ip)=>{
       await fetch("/topo/unblock/host",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ip})});
-      setBlockMsg("Unblocked: "+ip);
+      setBlockMsg("Unblocked: "+ip);showToast("Host "+ip+" unblocked","success");
       fetch("/topo/blocked/hosts").then(r=>r.json()).then(setBlockedHosts).catch(()=>{});
       setTimeout(()=>setBlockMsg(""),4000);
     };
@@ -933,12 +1027,12 @@ export default function App(){
                       <span style={{color:C.purple,fontSize:11,fontWeight:700}}>{t.mitre_id}</span>
                       <span style={{color:C.muted,fontSize:11}}>{t.mitre_desc}</span>
                       {t.mitre_url&&<a href={t.mitre_url} target="_blank" rel="noreferrer"
-                        style={{color:C.accent,fontSize:10,textDecoration:"none"}}>MITRE ↗</a>}
+                        style={{color:C.accent,fontSize:10,textDecoration:"none"}}>MITRE [ext]</a>}
                     </div>}
                     {t.mitre_id&&MITRE_DESCRIPTIONS[t.mitre_id]&&
                       <div style={{color:C.muted,fontSize:10,marginTop:3,maxWidth:400}}>{MITRE_DESCRIPTIONS[t.mitre_id]}</div>}
                   </div>
-                  <span style={{color:C.muted,fontSize:12,flexShrink:0,marginLeft:8}}>{t.total}×</span>
+                  <span style={{color:C.muted,fontSize:12,flexShrink:0,marginLeft:8}}>{t.total}x</span>
                 </div>
               </div>
             ))}
@@ -1013,7 +1107,7 @@ export default function App(){
     );
   };
 
-  // ── TAB: PACKETS ─────────────────────────────────────────────────────────────
+  // -- TAB: PACKETS -------------------------------------------------------------
   const renderPackets=()=>{
     const total=pktStats.total||1;
     const protos=["arp","icmp","tcp","udp","http","https","dns","ssh","dhcp","ftp","openflow","other"];
@@ -1051,8 +1145,8 @@ export default function App(){
               <div key={i} style={{borderBottom:`1px solid ${C.border}10`,padding:"3px 0"}}>
                 <div style={{color:C.accent,fontSize:10,fontFamily:"monospace"}}>{h.ip||h.mac}</div>
                 <div style={{display:"flex",gap:8,fontSize:10}}>
-                  <span style={{color:C.green}}>↑{fS(h.tx_bytes)}</span>
-                  <span style={{color:C.orange}}>↓{fS(h.rx_bytes)}</span>
+                  <span style={{color:C.green}}> ^ {fS(h.tx_bytes)}</span>
+                  <span style={{color:C.orange}}> v {fS(h.rx_bytes)}</span>
                 </div>
               </div>
             ))}
@@ -1102,12 +1196,12 @@ export default function App(){
                         <td colSpan={8} style={{background:C.navy,padding:"10px 16px"}}>
                           <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,fontSize:11}}>
                             {[["Packet ID",p.id],["Timestamp",fT(p.ts)],["Switch",p.sw],["In Port",p.port],
-                              ["Src MAC",p.src_mac],["Dst MAC",p.dst_mac],["Src IP",p.src_ip||"—"],["Dst IP",p.dst_ip||"—"],
+                              ["Src MAC",p.src_mac],["Dst MAC",p.dst_mac],["Src IP",p.src_ip||"--"],["Dst IP",p.dst_ip||"--"],
                               ["Protocol",p.proto?.toUpperCase()],["Length",p.len+" bytes"],
-                              ["Src Port",p.sp||"—"],["Dst Port",p.dp||"—"],
-                              ["TCP Flags",p.flags||"—"],["TTL",p.ttl||"—"],
-                              ["IP Proto",p.ip_proto||"—"],["Info",p.info]].map(([k,v])=>(
-                              <div key={k}><span style={{color:C.muted}}>{k}: </span><span style={{color:C.text,fontFamily:"monospace"}}>{v||"—"}</span></div>
+                              ["Src Port",p.sp||"--"],["Dst Port",p.dp||"--"],
+                              ["TCP Flags",p.flags||"--"],["TTL",p.ttl||"--"],
+                              ["IP Proto",p.ip_proto||"--"],["Info",p.info]].map(([k,v])=>(
+                              <div key={k}><span style={{color:C.muted}}>{k}: </span><span style={{color:C.text,fontFamily:"monospace"}}>{v||"--"}</span></div>
                             ))}
                           </div>
                         </td>
@@ -1127,7 +1221,7 @@ export default function App(){
     );
   };
 
-  // ── TAB: SESSIONS ───────────────────────────────────────────────────────────
+  // -- TAB: SESSIONS -----------------------------------------------------------
   const renderConnections=()=>{
     const filtered=connections.filter(c=>{
       if(!connFilter)return true;
@@ -1180,13 +1274,13 @@ export default function App(){
               ))}
             </tbody>
           </table>
-          {filtered.length===0&&<div style={{color:C.muted,textAlign:"center",padding:32}}>No TCP/UDP sessions — run iperf or wget in Mininet</div>}
+          {filtered.length===0&&<div style={{color:C.muted,textAlign:"center",padding:32}}>No TCP/UDP sessions -- run iperf or wget in Mininet</div>}
         </div>
       </div>
     );
   };
 
-  // ── TAB: HOSTS ──────────────────────────────────────────────────────────────
+  // -- TAB: HOSTS --------------------------------------------------------------
   const renderHosts=()=>{
     const htopo=raw.hosts||[];
     // merge hostIntel with topo data (IP from topo is more reliable)
@@ -1243,10 +1337,10 @@ export default function App(){
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:3,marginTop:8,fontSize:10}}>
                   <div><span style={{color:C.muted}}>Switch: </span>
                     <span style={{color:C.accent,fontFamily:"monospace"}}>
-                      {h.sw_num?`s${h.sw_num}`:(h.dpid?h.dpid.slice(-6):"—")}
+                      {h.sw_num?`s${h.sw_num}`:(h.dpid?h.dpid.slice(-6):"--")}
                     </span>
                   </div>
-                  <div><span style={{color:C.muted}}>Port: </span><span style={{color:C.text}}>{h.port||"—"}</span></div>
+                  <div><span style={{color:C.muted}}>Port: </span><span style={{color:C.text}}>{h.port||"--"}</span></div>
                   <div><span style={{color:C.muted}}>TX: </span><span style={{color:C.green}}>{fS(h.tx_bytes||0)}</span></div>
                   <div><span style={{color:C.muted}}>RX: </span><span style={{color:C.orange}}>{fS(h.rx_bytes||0)}</span></div>
                   <div><span style={{color:C.muted}}>Pkts: </span><span style={{color:C.text}}>{((h.tx_pkts||0)+(h.rx_pkts||0)).toLocaleString()}</span></div>
@@ -1272,14 +1366,14 @@ export default function App(){
             );
           })}
           {merged.length===0&&<div style={{color:C.muted,fontSize:13,textAlign:"center",padding:48,width:"100%"}}>
-            No host intel — run <code style={{color:C.accent}}>pingall</code> in Mininet
+            No host intel -- run <code style={{color:C.accent}}>pingall</code> in Mininet
           </div>}
         </div>
       </div>
     );
   };
 
-  // ── TAB: FLOWS ───────────────────────────────────────────────────────────────
+  // -- TAB: FLOWS ---------------------------------------------------------------
   const dpidsList=Object.keys(flows);
   const activeDpid=flowDpid||dpidsList[0]||"";
   const activeFlows=flows[activeDpid]||[];
@@ -1351,19 +1445,19 @@ export default function App(){
             ))}
           </tbody>
         </table>
-        {activeFlows.length===0&&<div style={{color:C.muted,textAlign:"center",padding:32}}>No flows — select a switch above</div>}
+        {activeFlows.length===0&&<div style={{color:C.muted,textAlign:"center",padding:32}}>No flows -- select a switch above</div>}
       </div>
     </div>
   );
 
-  // ── TAB: QoS ─────────────────────────────────────────────────────────────────
+  // -- TAB: QoS -----------------------------------------------------------------
   const DSCP_PRESETS=[
-    {label:"Voice (EF 46)",  dscp:"46",queue:"1",proto:"17",port:"5060",desc:"VoIP/RTP — lowest latency, highest priority"},
+    {label:"Voice (EF 46)",  dscp:"46",queue:"1",proto:"17",port:"5060",desc:"VoIP/RTP -- lowest latency, highest priority"},
     {label:"Video (AF41 34)",dscp:"34",queue:"2",proto:"17",port:"",  desc:"Video conferencing streams"},
     {label:"Signal (CS3 24)",dscp:"24",queue:"2",proto:"17",port:"5060",desc:"SIP signalling & VoIP control"},
     {label:"Interac (AF21 18)",dscp:"18",queue:"3",proto:"6",port:"22",desc:"SSH / interactive sessions"},
     {label:"Bulk (CS1 8)",   dscp:"8", queue:"4",proto:"6",port:"",  desc:"File transfers, backups"},
-    {label:"Best Effort",    dscp:"0", queue:"-1",proto:"",port:"",  desc:"Default — no QoS marking"},
+    {label:"Best Effort",    dscp:"0", queue:"-1",proto:"",port:"",  desc:"Default -- no QoS marking"},
   ];
   const applyQos=async()=>{
     const body={dpid:qosForm.dpid,dscp:parseInt(qosForm.dscp),queue_id:parseInt(qosForm.queue_id),
@@ -1406,15 +1500,15 @@ export default function App(){
         <div style={{...S.card,border:`1px solid ${C.teal}`}}>
           <div style={{...S.title,color:C.teal}}>How to Test QoS</div>
           <div style={{fontSize:11,color:C.muted,lineHeight:1.7}}>
-            <div style={{color:C.text,fontWeight:700,marginBottom:4}}>Step 1 — Apply a rule (example: prioritize ICMP)</div>
+            <div style={{color:C.text,fontWeight:700,marginBottom:4}}>Step 1 -- Apply a rule (example: prioritize ICMP)</div>
             <div>Set: DSCP=46, NW Proto=1 (ICMP), Priority=300, click Apply</div>
-            <div style={{color:C.text,fontWeight:700,margin:"8px 0 4px"}}>Step 2 — Verify in Flows tab</div>
-            <div>Go to Flows tab, select the switch — you should see your new rule.</div>
-            <div style={{color:C.text,fontWeight:700,margin:"8px 0 4px"}}>Step 3 — Generate traffic in Mininet</div>
+            <div style={{color:C.text,fontWeight:700,margin:"8px 0 4px"}}>Step 2 -- Verify in Flows tab</div>
+            <div>Go to Flows tab, select the switch -- you should see your new rule.</div>
+            <div style={{color:C.text,fontWeight:700,margin:"8px 0 4px"}}>Step 3 -- Generate traffic in Mininet</div>
             <code style={{display:"block",background:C.dark,padding:6,borderRadius:4,color:C.cyan,marginTop:4}}>mininet&gt; h1 ping -c 20 h2</code>
             <code style={{display:"block",background:C.dark,padding:6,borderRadius:4,color:C.cyan,marginTop:4}}>mininet&gt; h1 iperf -s &amp; h2 iperf -c 10.0.0.1</code>
-            <div style={{color:C.text,fontWeight:700,margin:"8px 0 4px"}}>Step 4 — Check Packets tab</div>
-            <div>Filter by ICMP — confirm packets show up. In a real setup with OVS queues, use:</div>
+            <div style={{color:C.text,fontWeight:700,margin:"8px 0 4px"}}>Step 4 -- Check Packets tab</div>
+            <div>Filter by ICMP -- confirm packets show up. In a real setup with OVS queues, use:</div>
             <code style={{display:"block",background:C.dark,padding:6,borderRadius:4,color:C.cyan,marginTop:4}}>sudo ovs-appctl qos/show s1</code>
             <div style={{color:C.text,fontWeight:700,margin:"8px 0 4px"}}>Note on queues</div>
             <div>Queue IDs require OVS queue config. Without queues, DSCP marking still works for downstream routers. Set Queue=-1 for marking-only mode.</div>
@@ -1449,9 +1543,9 @@ export default function App(){
         </div>
         <div style={S.card}>
           <div style={S.title}>DSCP Quick Reference</div>
-          {[["EF (46)","Expedited Fwd — VoIP"],["AF41 (34)","Assured Fwd — video"],
-            ["CS3 (24)","Class Sel — signalling"],["AF21 (18)","Assured Fwd — interactive"],
-            ["CS1 (8)", "Scavenger / bulk"],["BE (0)",  "Best effort — default"]].map(([code,desc])=>(
+          {[["EF (46)","Expedited Fwd -- VoIP"],["AF41 (34)","Assured Fwd -- video"],
+            ["CS3 (24)","Class Sel -- signalling"],["AF21 (18)","Assured Fwd -- interactive"],
+            ["CS1 (8)", "Scavenger / bulk"],["BE (0)",  "Best effort -- default"]].map(([code,desc])=>(
             <div key={code} style={{borderBottom:`1px solid ${C.border}15`,padding:"4px 0",fontSize:11}}>
               <span style={{color:C.accent,fontFamily:"monospace",marginRight:8}}>{code}</span>
               <span style={{color:C.muted}}>{desc}</span>
@@ -1480,7 +1574,7 @@ export default function App(){
     </div>
   );
 
-  // ── TAB: GRAPHS ──────────────────────────────────────────────────────────────
+  // -- TAB: GRAPHS --------------------------------------------------------------
   const renderGraphs=()=>{
     const dpids=Object.keys(bwh);
     const selDpid=graphDpid||dpids[0]||"";
@@ -1509,7 +1603,7 @@ export default function App(){
         </div>
         {/* Main BW chart */}
         <div style={S.card}>
-          <div style={S.title}>Bandwidth — {selDpid.slice(-8)} Port {selPort}</div>
+          <div style={S.title}>Bandwidth -- {selDpid.slice(-8)} Port {selPort}</div>
           {hist.length>1?(
             <>
               <svg width={cw} height={ch} style={{background:C.bg,borderRadius:6,display:"block",maxWidth:"100%"}}>
@@ -1530,11 +1624,11 @@ export default function App(){
                 <span style={{color:C.muted,fontSize:12}}>Util: {hist[hist.length-1]?.util||0}%</span>
               </div>
             </>
-          ):<div style={{color:C.muted,padding:24,textAlign:"center"}}>No history — run traffic in Mininet</div>}
+          ):<div style={{color:C.muted,padding:24,textAlign:"center"}}>No history -- run traffic in Mininet</div>}
         </div>
         {/* ALL switches sparklines */}
         <div style={S.card}>
-          <div style={S.title}>All Switches — Bandwidth Sparklines</div>
+          <div style={S.title}>All Switches -- Bandwidth Sparklines</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
             {dpids.map(d=>{
               const allPorts=Object.values(bwh[d]||{});
@@ -1560,7 +1654,7 @@ export default function App(){
         </div>
         {/* Hosts traffic chart */}
         <div style={S.card}>
-          <div style={S.title}>Hosts — Total Traffic (TX+RX)</div>
+          <div style={S.title}>Hosts -- Total Traffic (TX+RX)</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
             {hostBwData.map((h,i)=>(
               <div key={i} style={{minWidth:180}}>
@@ -1573,8 +1667,8 @@ export default function App(){
                   <div style={{flex:h.rx_bytes||1,height:6,background:C.orange,borderRadius:3,minWidth:2}}/>
                 </div>
                 <div style={{display:"flex",gap:8,fontSize:9,color:C.muted}}>
-                  <span style={{color:C.green}}>↑TX {fS(h.tx_bytes)}</span>
-                  <span style={{color:C.orange}}>↓RX {fS(h.rx_bytes)}</span>
+                  <span style={{color:C.green}}> ^ TX {fS(h.tx_bytes)}</span>
+                  <span style={{color:C.orange}}> v RX {fS(h.rx_bytes)}</span>
                 </div>
               </div>
             ))}
@@ -1583,7 +1677,7 @@ export default function App(){
         </div>
         {/* Controller traffic per switch */}
         <div style={S.card}>
-          <div style={S.title}>POX Controller — PacketIn per Switch</div>
+          <div style={S.title}>POX Controller -- PacketIn per Switch</div>
           <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
             {ctrlPerDpid.map(([d,v])=>(
               <div key={d} style={{...S.card,padding:8,minWidth:160}}>
@@ -1599,7 +1693,7 @@ export default function App(){
         </div>
         {/* Alert frequency histogram */}
         <div style={S.card}>
-          <div style={S.title}>Alert Frequency — last 60 min</div>
+          <div style={S.title}>Alert Frequency -- last 60 min</div>
           {(()=>{
             const now=Date.now()/1000;
             const bkts=Array(60).fill(0);
@@ -1623,19 +1717,19 @@ export default function App(){
     );
   };
 
-  // ── TAB: TESTS ───────────────────────────────────────────────────────────────
+  // -- TAB: TESTS ---------------------------------------------------------------
   const TEST_TYPES=[
-    {id:"ping",        label:"Ping",          icon:"🏓", desc:"ICMP echo — basic connectivity test"},
-    {id:"ping_flood",  label:"Ping Flood",    icon:"💥", desc:"100 rapid pings — stress test / triggers ICMP flood alert"},
+    {id:"ping",        label:"Ping",          icon:"🏓", desc:"ICMP echo -- basic connectivity test"},
+    {id:"ping_flood",  label:"Ping Flood",    icon:"💥", desc:"100 rapid pings -- stress test / triggers ICMP flood alert"},
     {id:"traceroute",  label:"Traceroute",    icon:"🗺", desc:"Discover hop-by-hop path (triggers TTL anomaly alerts)"},
     {id:"iperf_tcp",   label:"iPerf TCP",     icon:"📶", desc:"TCP bandwidth test between two hosts"},
     {id:"iperf_udp",   label:"iPerf UDP",     icon:"📡", desc:"UDP bandwidth test at 10Mbps for 5s"},
-    {id:"hping_syn",   label:"hping SYN scan",icon:"🔍", desc:"SYN scan on port 80 — triggers port scan alert"},
+    {id:"hping_syn",   label:"hping SYN scan",icon:"🔍", desc:"SYN scan on port 80 -- triggers port scan alert"},
     {id:"hping_icmp",  label:"hping ICMP",    icon:"📨", desc:"100 ICMP packets via hping3"},
     {id:"nmap",        label:"Nmap Scan",     icon:"🔭", desc:"Service version scan ports 1-100"},
     {id:"nmap_ping",   label:"Nmap Ping",     icon:"📍", desc:"Ping sweep of target"},
     {id:"arp_scan",    label:"ARP Scan",      icon:"🔗", desc:"Discover all hosts via ARP"},
-    {id:"dns",         label:"DNS Lookup",    icon:"🌐", desc:"nslookup — triggers DNS traffic"},
+    {id:"dns",         label:"DNS Lookup",    icon:"🌐", desc:"nslookup -- triggers DNS traffic"},
     {id:"wget",        label:"HTTP GET",      icon:"📥", desc:"wget HTTP request to target"},
     {id:"http_server",  label:"HTTP Server",   icon:"🖥", desc:"Start SimpleHTTPServer on source host (port 8080)"},
     {id:"http_client",  label:"HTTP Client",   icon:"🌐", desc:"curl HTTP request from src to dst:8080"},
@@ -1764,7 +1858,7 @@ export default function App(){
                   <span style={{color:C.accent,fontWeight:700,fontSize:11}}>{TEST_TYPES.find(x=>x.id===t.type)?.icon} {t.type}</span>
                   <span style={{color:C.muted,fontSize:10}}>{new Date(t.ts*1000).toLocaleTimeString()}</span>
                 </div>
-                <div style={{color:C.muted,fontSize:10}}>{t.src} → {t.dst}</div>
+                <div style={{color:C.muted,fontSize:10}}>{t.src}  ->  {t.dst}</div>
                 <code style={{display:"block",background:C.dark,color:C.cyan,padding:"3px 6px",borderRadius:4,fontSize:10,marginTop:3,wordBreak:"break-all"}}>{t.full_cmd}</code>
               </div>
             ))}
@@ -1772,18 +1866,18 @@ export default function App(){
           <div style={S.card}>
             <div style={S.title}>What Each Test Triggers</div>
             <div style={{fontSize:11,color:C.muted,lineHeight:1.7}}>
-              {[["Ping","→ ICMP in Packets tab"],["Ping Flood","→ ICMP flood alert"],
-                ["Traceroute","→ TTL anomaly alerts"],["iPerf TCP","→ TCP sessions"],
-                ["iPerf UDP","→ UDP bandwidth burst"],["hping SYN","→ Port scan alert"],
-                ["hping ICMP","→ ICMP storm"],["hping UDP","→ UDP flood alert"],
-                ["hping Rand-Src","→ DDoS simulation"],["hping LAND","→ LAND attack"],
-                ["hping RST","→ TCP RST flood"],["hping Xmas","→ Xmas tree scan"],
-                ["Nmap","→ Port scan alert"],["OS Detect","→ Fingerprint probe"],
-                ["ARP Scan","→ ARP flood alert"],["Slowloris","→ HTTP slow attack"],
-                ["HTTP Server","→ starts web server on host"],
-                ["HTTP Client","→ HTTP GET request"],
-                ["UDP Flood","→ bandwidth saturation"],
-                ["Packet Loss","→ link quality stats"]
+              {[["Ping"," ->  ICMP in Packets tab"],["Ping Flood"," ->  ICMP flood alert"],
+                ["Traceroute"," ->  TTL anomaly alerts"],["iPerf TCP"," ->  TCP sessions"],
+                ["iPerf UDP"," ->  UDP bandwidth burst"],["hping SYN"," ->  Port scan alert"],
+                ["hping ICMP"," ->  ICMP storm"],["hping UDP"," ->  UDP flood alert"],
+                ["hping Rand-Src"," ->  DDoS simulation"],["hping LAND"," ->  LAND attack"],
+                ["hping RST"," ->  TCP RST flood"],["hping Xmas"," ->  Xmas tree scan"],
+                ["Nmap"," ->  Port scan alert"],["OS Detect"," ->  Fingerprint probe"],
+                ["ARP Scan"," ->  ARP flood alert"],["Slowloris"," ->  HTTP slow attack"],
+                ["HTTP Server"," ->  starts web server on host"],
+                ["HTTP Client"," ->  HTTP GET request"],
+                ["UDP Flood"," ->  bandwidth saturation"],
+                ["Packet Loss"," ->  link quality stats"]
               ].map(([k,v])=>(
                 <div key={k} style={{borderBottom:`1px solid ${C.border}18`,padding:"2px 0"}}><span style={{color:C.text,fontWeight:700}}>{k}</span> <span>{v}</span></div>
               ))}
@@ -1810,7 +1904,7 @@ export default function App(){
     );
   };
 
-  // ── TAB: CMDLOG ──────────────────────────────────────────────────────────────
+  // -- TAB: CMDLOG --------------------------------------------------------------
   const renderCmdlog=()=>(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",marginBottom:12,alignItems:"center",flexWrap:"wrap",gap:8}}>
@@ -1826,8 +1920,8 @@ export default function App(){
       <div style={{...S.card,marginBottom:12,padding:8}}>
         <div style={{color:C.muted,fontSize:11,marginBottom:6}}>
           <strong style={{color:C.yellow}}>About command monitoring:</strong> This log captures:
-          (1) OpenFlow events — switch connections, flow installs/deletions,
-          (2) Operator actions — QoS rules, block-host, flow additions,
+          (1) OpenFlow events -- switch connections, flow installs/deletions,
+          (2) Operator actions -- QoS rules, block-host, flow additions,
           (3) Test launcher commands you generate above,
           (4) Manual entries. To monitor real Mininet commands, pipe them via the REST API
           or use the "Add Manual" button.
@@ -1854,7 +1948,7 @@ export default function App(){
     </div>
   );
 
-  // ── TAB: EVENTS ──────────────────────────────────────────────────────────────
+  // -- TAB: EVENTS --------------------------------------------------------------
   const renderEvents=()=>(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,alignItems:"center"}}>
@@ -1876,7 +1970,7 @@ export default function App(){
     </div>
   );
 
-  // ── TAB: REPORTS ─────────────────────────────────────────────────────────────
+  // -- TAB: REPORTS -------------------------------------------------------------
   const generateReport=()=>{
     const now=Date.now()/1000;const cutoff=now-reportRange;
     const recent=alerts.filter(a=>a.ts>=cutoff);
@@ -2000,7 +2094,7 @@ export default function App(){
     </div>
   );
 
-  // ── TAB: EXPORT ──────────────────────────────────────────────────────────────
+  // -- TAB: EXPORT --------------------------------------------------------------
   const renderExport=()=>{
     const download=(data,fname,type)=>{
       const blob=new Blob([typeof data==="string"?data:JSON.stringify(data,null,2)],{type});
@@ -2082,8 +2176,8 @@ export default function App(){
     );
   };
 
-  // ── TAB BAR + ROOT RENDER ───────────────────────────────────────────────────
-// ── TAB: SIMULATE ────────────────────────────────────────────────────────────
+  // -- TAB BAR + ROOT RENDER ---------------------------------------------------
+// -- TAB: SIMULATE ------------------------------------------------------------
   const renderSimulate=()=>{
     const scenarios=[
       {id:"ddos",     icon:"💣", label:"DDoS Simulation",    color:"#f85149",
@@ -2205,7 +2299,7 @@ export default function App(){
     );
   };
 
-  // ── TAB: NET CALCULATOR ───────────────────────────────────────────────────────
+  // -- TAB: NET CALCULATOR -------------------------------------------------------
   const renderNetCalc=()=>{
     const calcSubnet=()=>{
       try{
@@ -2284,7 +2378,7 @@ export default function App(){
                   <span style={{color:C.muted,fontSize:10}}>{h.mac}</span>
                 </div>
               ))}
-              {!(raw.hosts||[]).length&&<div style={{color:C.muted}}>No hosts detected — start Mininet</div>}
+              {!(raw.hosts||[]).length&&<div style={{color:C.muted}}>No hosts detected -- start Mininet</div>}
             </div>
           </div>
           <div style={{...S.card,marginTop:12}}>
@@ -2312,6 +2406,217 @@ export default function App(){
     );
   };
 
+  // -- TAB: REAL-TIME MONITOR --------------------------------------------------
+  const renderRTMap=()=>{
+    const protos=["arp","icmp","tcp","udp","http","https","dns","ssh","dhcp","ftp","openflow","other"];
+    const totalPkts=pktStats.total||1;
+    const filtered=allPackets.filter(p=>rtFilter==="all"||p.proto===rtFilter).slice(-200).reverse();
+    const perSw={};
+    (raw.switches||[]).forEach((s,i)=>{
+      const ports=bw[s.dpid]||{};
+      let tx=0,rx=0;
+      Object.values(ports).forEach(p=>{tx+=p.rate_tx||0;rx+=p.rate_rx||0;});
+      perSw[s.dpid]={tx,rx,name:"s"+(i+1)};
+    });
+    return(
+      <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:300}}>
+          <div style={S.card}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:4}}>
+              <div style={S.title}>Live Traffic Feed</div>
+              <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                <button onClick={()=>setRtFilter("all")} style={{...S.btn,fontSize:10,padding:"2px 8px",background:rtFilter==="all"?C.accent:"transparent"}}>All</button>
+                {protos.map(p=><button key={p} onClick={()=>setRtFilter(p)} style={{...S.btn,fontSize:10,padding:"2px 6px",background:rtFilter===p?(PROTO[p]||C.muted):"transparent",color:rtFilter===p?"#000":PROTO[p]||C.muted}}>{p.toUpperCase()}</button>)}
+              </div>
+            </div>
+            <div style={{maxHeight:340,overflowY:"auto",fontFamily:"monospace"}}>
+              {filtered.slice(0,120).map((pk,i)=>(
+                <div key={pk.id||i} style={{display:"flex",gap:8,padding:"3px 0",borderBottom:`1px solid ${C.border}18`,fontSize:11,alignItems:"center"}}>
+                  <span style={{color:C.muted,fontSize:10,width:60,flexShrink:0}}>{pk.ts?new Date(pk.ts*1000).toLocaleTimeString():"-"}</span>
+                  <Pill label={(pk.proto||"?").toUpperCase()} color={PROTO[pk.proto]||C.muted}/>
+                  <span style={{color:C.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pk.src_ip||pk.src_mac} {"->"} {pk.dst_ip||pk.dst_mac}</span>
+                  <span style={{color:C.muted,fontSize:10}}>{pk.len}B</span>
+                  {pk.flags&&<span style={{color:C.yellow,fontSize:9}}>{pk.flags}</span>}
+                </div>
+              ))}
+              {filtered.length===0&&<div style={{color:C.muted,textAlign:"center",padding:32}}>No packets match filter</div>}
+            </div>
+          </div>
+        </div>
+        <div style={{flex:"0 0 280px",display:"flex",flexDirection:"column",gap:10}}>
+          <div style={S.card}>
+            <div style={S.title}>Protocol Distribution</div>
+            {protos.filter(p=>pktStats[p]>0).map(p=>(
+              <div key={p} style={{marginBottom:6}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
+                  <span style={{color:PROTO[p]||C.muted,fontSize:11,fontWeight:700}}>{p.toUpperCase()}</span>
+                  <span style={{color:C.muted,fontSize:10}}>{pktStats[p]} ({Math.round((pktStats[p]/totalPkts)*100)}%)</span>
+                </div>
+                <Bar value={pktStats[p]} max={totalPkts} color={PROTO[p]||C.muted}/>
+              </div>
+            ))}
+          </div>
+          <div style={S.card}>
+            <div style={S.title}>Switch Bandwidth (live)</div>
+            {Object.entries(perSw).map(([dpid,d])=>(
+              <div key={dpid} style={{marginBottom:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
+                  <span style={{color:C.accent,fontWeight:700}}>{d.name}</span>
+                  <span style={{color:C.green}}>TX {fB(d.tx)}</span>
+                  <span style={{color:C.cyan}}>RX {fB(d.rx)}</span>
+                </div>
+                <div style={{display:"flex",gap:2,height:8}}>
+                  <div style={{flex:d.tx||1,background:C.green,borderRadius:2,maxWidth:"50%"}}/>
+                  <div style={{flex:d.rx||1,background:C.cyan,borderRadius:2,maxWidth:"50%"}}/>
+                </div>
+              </div>
+            ))}
+            {Object.keys(perSw).length===0&&<div style={{color:C.muted,fontSize:11}}>No switch data yet</div>}
+          </div>
+          <div style={S.card}>
+            <div style={S.title}>Controller Stats</div>
+            {[
+              ["Total Packets",pktStats.total||0],
+              ["Active Sessions",(connections||[]).length],
+              ["Active Alerts",alerts.filter(a=>a.active).length],
+              ["Blocked Hosts",blockedHosts.length],
+              ["Dismissed",dismissedAlerts.length],
+            ].map(([k,v])=>(
+              <div key={k} style={{display:"flex",justifyContent:"space-between",borderBottom:`1px solid ${C.border}18`,padding:"4px 0",fontSize:12}}>
+                <span style={{color:C.muted}}>{k}</span>
+                <span style={{color:C.text,fontWeight:700}}>{v.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // -- TAB: PLAYBOOK ----------------------------------------------------------
+  const renderPlaybook=()=>{
+    const books=[
+      {id:"isolate",icon:"X",label:"Isolate Host",color:C.red,
+       desc:"Block a suspicious host immediately and log the action to Events.",
+       steps:["Identify the host IP in the Threats tab","Copy the IP address","Enter it in the field below","Click Execute -- a drop rule is installed on all switches","Check the Blocked tab in Alerts to confirm"],
+       fields:[{label:"Target IP",key:"ip",placeholder:"e.g. 10.0.0.5"}],
+       action:async(vals)=>{
+         const r=await fetch("/topo/block/host",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ip:vals.ip})});
+         const d=await r.json();
+         setPlaybookLog(l=>[{ts:Date.now(),book:"Isolate Host",detail:"Blocked "+vals.ip+" on "+d.switches_affected+" switches"},...l.slice(0,49)]);
+         fetch("/topo/blocked/hosts").then(r=>r.json()).then(setBlockedHosts).catch(()=>{});
+       }
+      },
+      {id:"unblock",icon:"OK",label:"Restore Host",color:C.green,
+       desc:"Remove the block rule from all switches and restore connectivity.",
+       steps:["Confirm the host is safe (check threat score)","Enter the host IP","Click Execute -- the drop rule is removed from all switches","Verify connectivity by running ping from Mininet"],
+       fields:[{label:"Target IP",key:"ip",placeholder:"e.g. 10.0.0.5"}],
+       action:async(vals)=>{
+         const r=await fetch("/topo/unblock/host",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ip:vals.ip})});
+         const d=await r.json();
+         setPlaybookLog(l=>[{ts:Date.now(),book:"Restore Host",detail:"Unblocked "+vals.ip+" on "+d.switches_affected+" switches"},...l.slice(0,49)]);
+         fetch("/topo/blocked/hosts").then(r=>r.json()).then(setBlockedHosts).catch(()=>{});
+       }
+      },
+      {id:"clearalerts",icon:"!",label:"Clear All Alerts",color:C.purple,
+       desc:"Dismiss all active alerts at once after a confirmed false-positive storm.",
+       steps:["Confirm the alerts are false positives","Click Execute -- all alerts move to Dismissed tab","Check Events log to verify the clear action was logged"],
+       fields:[],
+       action:async()=>{
+         await fetch("/topo/alerts/clear",{method:"POST"});
+         const d=await fetch("/topo/alerts").then(r=>r.json()).catch(()=>[]);
+         setAlerts(d);setUnreadAlerts(0);
+         setPlaybookLog(l=>[{ts:Date.now(),book:"Clear Alerts",detail:"All alerts cleared"},...l.slice(0,49)]);
+       }
+      },
+      {id:"qos_limit",icon:"Q",label:"Apply QoS Limit",color:C.teal,
+       desc:"Throttle bandwidth on a specific switch port to contain a bandwidth-hogging host.",
+       steps:["Identify the offending host and its switch port in the Hosts tab","Note the switch DPID and port number","Enter values below","Click Execute -- QoS rule applied to OVS"],
+       fields:[{label:"Switch DPID",key:"dpid",placeholder:"00-00-00-00-00-01"},{label:"Port",key:"port",placeholder:"1"},{label:"Rate (Mbps)",key:"rate",placeholder:"10"}],
+       action:async(vals)=>{
+         await fetch("/topo/qos/apply",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(vals)});
+         setPlaybookLog(l=>[{ts:Date.now(),book:"QoS Limit",detail:vals.rate+"Mbps on "+vals.dpid+" port "+vals.port},...l.slice(0,49)]);
+       }
+      },
+    ];
+    const sel=books.find(b=>b.id===playbookSel);
+    const runPlaybook=async()=>{
+      if(!sel)return;
+      setPbRunning(true);setPbDone(false);
+      try{await sel.action(pbVals);}catch(e){console.error(e);}
+      setPbRunning(false);setPbDone(true);
+      setTimeout(()=>setPbDone(false),4000);
+    };
+    return(
+      <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:260}}>
+          <div style={S.card}>
+            <div style={S.title}>Incident Response Playbooks</div>
+            <div style={{color:C.muted,fontSize:11,marginBottom:10}}>Select a playbook to see the steps and execute it. All actions are logged.</div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {books.map(b=>(
+                <div key={b.id} onClick={()=>{setPlaybookSel(b.id===playbookSel?null:b.id);setPbVals({});setPbDone(false);}}
+                  style={{...S.card,cursor:"pointer",border:`1px solid ${playbookSel===b.id?b.color:C.border}`,background:playbookSel===b.id?b.color+"15":C.card}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{width:32,height:32,borderRadius:6,background:b.color+"25",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                      <span style={{color:b.color,fontWeight:700,fontSize:11}}>{b.icon}</span>
+                    </div>
+                    <div>
+                      <div style={{color:b.color,fontWeight:700,fontSize:13}}>{b.label}</div>
+                      <div style={{color:C.muted,fontSize:11}}>{b.desc}</div>
+                    </div>
+                  </div>
+                  {playbookSel===b.id&&(
+                    <div onClick={e=>e.stopPropagation()} style={{marginTop:10}}>
+                      <div style={{color:C.yellow,fontSize:11,fontWeight:700,marginBottom:6}}>Steps:</div>
+                      {b.steps.map((s,i)=>(
+                        <div key={i} style={{display:"flex",gap:8,marginBottom:4,fontSize:11}}>
+                          <span style={{color:b.color,fontWeight:700,minWidth:16}}>{i+1}.</span>
+                          <span style={{color:C.muted}}>{s}</span>
+                        </div>
+                      ))}
+                      {b.fields.length>0&&(
+                        <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:6}}>
+                          {b.fields.map(f=>(
+                            <div key={f.key}>
+                              <div style={{color:C.muted,fontSize:10,marginBottom:2}}>{f.label}</div>
+                              <input value={pbVals[f.key]||""} onChange={e=>setPbVals(v=>({...v,[f.key]:e.target.value}))}
+                                placeholder={f.placeholder} style={{...S.inp,width:"100%",boxSizing:"border-box"}}/>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <button onClick={runPlaybook} disabled={pbRunning}
+                        style={{...S.btn,marginTop:12,background:pbDone?C.green:b.color,color:"#000",fontWeight:700,width:"100%",padding:"8px 0",fontSize:13}}>
+                        {pbRunning?"Running...":pbDone?"Done!":"Execute Playbook"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div style={{flex:"0 0 280px"}}>
+          <div style={S.card}>
+            <div style={S.title}>Execution Log</div>
+            {playbookLog.length===0&&<div style={{color:C.muted,fontSize:11,textAlign:"center",padding:24}}>No playbooks executed yet</div>}
+            {playbookLog.map((e,i)=>(
+              <div key={i} style={{borderBottom:`1px solid ${C.border}18`,padding:"6px 0"}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:10}}>
+                  <span style={{color:C.accent,fontWeight:700}}>{e.book}</span>
+                  <span style={{color:C.muted}}>{new Date(e.ts).toLocaleTimeString()}</span>
+                </div>
+                <div style={{color:C.muted,fontSize:11,marginTop:2}}>{e.detail}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+
   const TABS=[
     {id:"DASHBOARD", label:"Dashboard"},
     {id:"TOPOLOGY",  label:"Topology"},
@@ -2330,63 +2635,302 @@ export default function App(){
     {id:"EXPORT",    label:"Export"},
     {id:"SIMULATE",  label:"Simulate"},
     {id:"NETCALC",   label:"Net Calc"},
+    {id:"RTMAP",     label:"RT Monitor"},
+    {id:"PLAYBOOK",  label:"Playbook"},
   ];
 
+
+  // -- nav structure ----------------------------------------------------------
+  const NAV=[
+    {group:"monitor", icon:"📊", label:"Monitor", color:C.accent, tabs:[
+      {id:"DASHBOARD", label:"Dashboard",   icon:"🏠"},
+      {id:"TOPOLOGY",  label:"Topology",    icon:"🗺"},
+      {id:"RTMAP",     label:"RT Monitor",  icon:"📱"},
+      {id:"GRAPHS",    label:"Graphs",      icon:"📈"},
+    ]},
+    {group:"security", icon:"🛡", label:"Security", color:C.red, tabs:[
+      {id:"ALERTS",    label:"Alerts",     icon:"🚨", badge:()=>unreadAlerts,  bcolor:C.red},
+      {id:"THREATS",   label:"Threats",    icon:"🎯", badge:()=>hostIntel.filter(h=>h.threat_score>30).length, bcolor:C.orange},
+      {id:"PACKETS",   label:"Packets",    icon:"📦"},
+      {id:"SESSIONS",  label:"Sessions",   icon:"🔗"},
+      {id:"EVENTS",    label:"Events",     icon:"📜", badge:()=>unreadEvents,  bcolor:C.muted},
+    ]},
+    {group:"manage", icon:"⚙", label:"Manage", color:C.green, tabs:[
+      {id:"HOSTS",     label:"Hosts",      icon:"🖥"},
+      {id:"FLOWS",     label:"Flows",      icon:"⇌"},
+      {id:"QOS",       label:"QoS",        icon:"🎦"},
+      {id:"CMDLOG",    label:"Cmd Log",    icon:"🗒", badge:()=>unreadCmds, bcolor:C.teal},
+    ]},
+    {group:"tools", icon:"🔧", label:"Tools", color:C.purple, tabs:[
+      {id:"TESTS",     label:"Tests",      icon:"🧪"},
+      {id:"SIMULATE",  label:"Simulate",   icon:"💣"},
+      {id:"PLAYBOOK",  label:"Playbook",   icon:"📖"},
+      {id:"NETCALC",   label:"Net Calc",   icon:"🧮"},
+      {id:"REPORTS",   label:"Reports",    icon:"📋"},
+      {id:"EXPORT",    label:"Export",     icon:"📥"},
+    ]},
+  ];
+  const activeGroup=NAV.find(g=>g.tabs.some(t=>t.id===tab))?.group||"monitor";
+
   return(
-    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'SF Mono',monospace,sans-serif",padding:16}}>
-      {/* Header */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
-        <div>
-          <span style={{fontSize:16,fontWeight:800,letterSpacing:-0.5}}>SDN Topology Visualizer</span>
-          <span style={{fontSize:10,color:C.muted,marginLeft:10}}>SIEM + EDR + Wireshark + Flow Manager + QoS + Threat Intel</span>
+    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'Inter','SF Pro',system-ui,Arial,sans-serif",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+
+      <style>{`
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes slideIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
+        @keyframes glow{0%,100%{box-shadow:0 0 4px #58a6ff44}50%{box-shadow:0 0 14px #58a6ff99}}
+        ::-webkit-scrollbar{width:5px;height:5px}
+        ::-webkit-scrollbar-track{background:transparent}
+        ::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
+        ::-webkit-scrollbar-thumb:hover{background:#58a6ff66}
+        *{box-sizing:border-box}
+        input:focus,select:focus{border-color:#58a6ff!important;outline:none;box-shadow:0 0 0 3px #58a6ff22!important}
+        button{transition:opacity .15s,transform .1s}
+        button:hover{opacity:.85}
+        button:active{transform:scale(.97)}
+        .nav-pill:hover{filter:brightness(1.15)}
+        .stat-chip:hover{transform:scale(1.04)}
+      `}</style>
+
+      {/* TOAST */}
+      {toast&&(
+        <div style={{position:"fixed",top:18,right:18,zIndex:9999,
+          background:toast.type==="error"?C.red:toast.type==="success"?C.green:toast.type==="warn"?C.orange:C.accent,
+          color:"#000",padding:"11px 18px",borderRadius:12,fontSize:13,fontWeight:700,
+          boxShadow:"0 8px 32px #0009",animation:"fadeIn .25s",display:"flex",gap:10,alignItems:"center",maxWidth:360}}>
+          <span style={{fontSize:16}}>{toast.type==="error"?"\u274c":toast.type==="success"?"\u2705":toast.type==="warn"?"\u26a0\ufe0f":"\u2139\ufe0f"}</span>
+          <span style={{flex:1}}>{toast.msg}</span>
+          <button onClick={()=>setToast(null)} style={{background:"none",border:"none",color:"#000",cursor:"pointer",fontSize:18,lineHeight:1}}>✕</button>
         </div>
-        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          {activeAlerts.filter(a=>a.severity==="critical").length>0&&(
-            <div style={{background:"#2d1414",border:`1px solid ${C.red}`,borderRadius:6,padding:"3px 10px",fontSize:11,color:C.red,fontWeight:700,cursor:"pointer"}}
-              onClick={()=>setTab("ALERTS")}>
-              CRITICAL {activeAlerts.filter(a=>a.severity==="critical").length} ALERT{activeAlerts.filter(a=>a.severity==="critical").length!==1?"S":""}
-            </div>
-          )}
-          <div style={{display:"flex",alignItems:"center",gap:5}}>
-            <div style={{width:8,height:8,borderRadius:"50%",background:connected?C.green:C.red}}/>
-            <span style={{fontSize:11,color:connected?C.green:C.red}}>{connected?"POX Connected":"Disconnected"}</span>
+      )}
+
+      {/* TOP HEADER */}
+      <div style={{background:C.panel,borderBottom:`1px solid ${C.border}`,padding:"0 16px",
+        display:"flex",alignItems:"center",gap:10,height:54,flexShrink:0,
+        position:"sticky",top:0,zIndex:100,boxShadow:"0 1px 8px #00000044"}}>
+
+        {/* M3 logo */}
+        <div style={{display:"flex",alignItems:"center",gap:10,minWidth:sidebarOpen?172:40,transition:"min-width .2s",overflow:"hidden"}}>
+          <div style={{width:36,height:36,borderRadius:10,flexShrink:0,
+            background:"linear-gradient(135deg,"+C.accent+","+C.purple+")",
+            display:"flex",alignItems:"center",justifyContent:"center",
+            boxShadow:"0 2px 12px "+C.accent+"66",animation:"glow 3s infinite"}}>
+            <span style={{color:"#fff",fontWeight:900,fontSize:13,letterSpacing:-1}}>M3</span>
           </div>
-          {summary&&<span style={{fontSize:10,color:C.muted}}>up {fAge(summary.uptime||0)}</span>}
+          {sidebarOpen&&<div style={{animation:"slideIn .25s"}}>
+            <div style={{fontSize:13,fontWeight:900,letterSpacing:-0.5,
+              background:"linear-gradient(90deg,"+C.accent+","+C.purple+")",
+              WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>SDN Visualizer</div>
+            <div style={{fontSize:9,color:C.muted,letterSpacing:0.8,textTransform:"uppercase"}}>by 0xMotaw3</div>
+          </div>}
+        </div>
+
+        {/* group pills */}
+        <div style={{display:"flex",gap:4,flex:1,justifyContent:"center",flexWrap:"wrap"}}>
+          {NAV.map(g=>{
+            const totalBadge=g.tabs.reduce((acc,t)=>{const b=t.badge?.();return acc+(b||0);},0);
+            return(
+              <button key={g.group} className="nav-pill"
+                onClick={()=>{setNavGroup(g.group);const first=g.tabs[0];if(first){setTab(first.id);if(first.id==="ALERTS")setUnreadAlerts(0);if(first.id==="EVENTS")setUnreadEvents(0);if(first.id==="CMDLOG")setUnreadCmds(0);}}}
+                style={{...S.btn,padding:"5px 13px",fontSize:12,fontWeight:600,
+                  background:activeGroup===g.group?g.color+"28":"transparent",
+                  color:activeGroup===g.group?g.color:C.muted,
+                  border:`1px solid ${activeGroup===g.group?g.color+"66":C.border}`,
+                  borderRadius:20,display:"flex",alignItems:"center",gap:5,
+                  boxShadow:activeGroup===g.group?"0 0 10px "+g.color+"33":"none"}}>
+                <span style={{fontSize:15}}>{g.icon}</span>{g.label}
+                {totalBadge>0&&<Badge n={totalBadge} color={g.color}/>}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* right controls */}
+        <div style={{display:"flex",gap:8,alignItems:"center",minWidth:sidebarOpen?190:120,justifyContent:"flex-end"}}>
+          {activeAlerts.filter(a=>a.severity==="critical").length>0&&(
+            <button onClick={()=>setTab("ALERTS")}
+              style={{...S.btn,background:C.red+"22",color:C.red,border:`1px solid ${C.red}`,
+                padding:"4px 10px",fontSize:11,fontWeight:700,animation:"pulse 1.5s infinite",borderRadius:8}}>
+              \ud83d\udea8 {activeAlerts.filter(a=>a.severity==="critical").length} CRITICAL
+            </button>
+          )}
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            <div style={{width:8,height:8,borderRadius:"50%",background:connected?C.green:C.red,
+              boxShadow:`0 0 ${connected?"8px "+C.green+"aa":"4px "+C.red+"aa"}`}}/>
+            <span style={{fontSize:11,color:connected?C.green:C.red,fontWeight:600}}>
+              {connected?"Connected":"Offline"}
+            </span>
+          </div>
+          <span style={{display:"flex",alignItems:"center",gap:4}}>
+              <span style={{fontSize:11,fontWeight:600,
+                background:"linear-gradient(90deg,"+C.green+","+C.accent+")",
+                WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>
+                &#9201; {fAge(summary?.uptime||0)}
+              </span>
+            </span>
         </div>
       </div>
-      {/* Tab bar */}
-      <div style={{display:"flex",gap:2,marginBottom:14,flexWrap:"wrap",borderBottom:`1px solid ${C.border}`,paddingBottom:8}}>
-        {TABS.map(t=>(
-          <button key={t.id}
-            onClick={()=>{setTab(t.id);if(t.id==="ALERTS")setUnreadAlerts(0);if(t.id==="EVENTS")setUnreadEvents(0);if(t.id==="CMDLOG")setUnreadCmds(0);}}
-            style={{...S.btn,
-              background:tab===t.id?C.accent:"transparent",
-              color:tab===t.id?"#000":C.muted,
-              fontWeight:tab===t.id?700:400,
-              border:tab===t.id?"none":`1px solid ${C.border}`,
-              padding:"5px 12px"}}>
-            {t.label}{t.badge>0&&<Badge n={t.badge} color={t.bcolor||C.red}/>}
+
+      {/* QUICK STATS BAR */}
+      {quickStats&&(
+        <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,
+          padding:"5px 16px",display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",flexShrink:0}}>
+          {[
+            {icon:"🔀",label:"Switches",  value:(summary?.switches||0),  color:C.accent,  click:"TOPOLOGY"},
+            {icon:"🖥",label:"Hosts",     value:(summary?.hosts||0),    color:C.green,   click:"HOSTS"},
+            {icon:"📦",label:"Packets",   value:(pktStats?.total||allPackets.length||0).toLocaleString(), color:C.cyan, click:"PACKETS"},
+            {icon:"📶",label:"BW",        value:fB((()=>{const bwhVals=Object.values(bwh||{});const live=bwhVals.map(v=>Array.isArray(v)?v[v.length-1]:(typeof v?.bandwidth==='number'?v.bandwidth:0));const total=live.reduce((a,b)=>a+b,0);return total||traffic?.total_bandwidth||summary?.bandwidth||0;})()), color:C.purple, click:"GRAPHS"},
+            {icon:"🚨",label:"Alerts",    value:activeAlerts.length,     color:activeAlerts.length>0?C.red:C.green, click:"ALERTS"},
+            {icon:"⚡",     label:"Flows",     value:Object.values(flows||{}).flat().length, color:C.yellow, click:"FLOWS"},
+            {icon:"🚫",label:"Blocked",   value:blockedHosts.length,    color:blockedHosts.length>0?C.orange:C.muted, click:"ALERTS"},
+            {icon:"⚠",     label:"Threats",   value:hostIntel.filter(h=>h.threat_score>50).length, color:hostIntel.filter(h=>h.threat_score>50).length>0?C.red:C.muted, click:"THREATS"},
+          ].map(s=>(
+            <div key={s.label} onClick={()=>s.click&&setTab(s.click)}
+              className="stat-chip"
+              style={{display:"flex",gap:4,alignItems:"center",cursor:"pointer",
+                padding:"3px 10px",borderRadius:20,border:"1px solid transparent",
+                transition:"all .15s"}}
+              onMouseEnter={e=>{e.currentTarget.style.background=C.border+"44";e.currentTarget.style.borderColor=C.border;}}
+              onMouseLeave={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.borderColor="transparent";}}>
+              <span style={{fontSize:14}}>{s.icon}</span>
+              <span style={{color:s.color,fontWeight:700,fontSize:13,fontFamily:"monospace"}}>{s.value}</span>
+              <span style={{color:C.muted,fontSize:11}}>{s.label}</span>
+            </div>
+          ))}
+          <div style={{flex:1}}/>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+              {/* mini bw sparkline */}
+              {bwh&&Object.values(bwh).length>0&&(()=>{
+                const rawBwh=Object.values(bwh)[0];const vals=(Array.isArray(rawBwh)?rawBwh:Object.values(rawBwh||{}).filter(v=>typeof v==='number')).slice(-12);
+                if(!vals.length)return null;
+                const max=Math.max(...vals,1);
+                const pts=vals.map((v,i)=>`${i*(28/(vals.length-1))},${12-Math.round((v/max)*10)}`).join(" ");
+                return<svg width={30} height={14} style={{opacity:.7}}>
+                  <polyline points={pts} fill="none" stroke={C.purple} strokeWidth={1.5}/>
+                </svg>;
+              })()}
+              <div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 10px",borderRadius:10,background:C.green+"18",border:`1px solid ${C.green}44`}}>
+                <span style={{width:6,height:6,borderRadius:"50%",background:C.green,display:"inline-block",animation:"pulse 1.5s infinite",boxShadow:"0 0 6px "+C.green}}></span>
+                <span style={{color:C.green,fontSize:10,fontWeight:700}}>LIVE</span>
+                <span style={{color:C.muted,fontSize:10}}>&#x2022; 2s</span>
+              </div>
+            </div>
+          <button onClick={()=>setQuickStats(false)} title="Hide stats bar"
+            style={{...S.btn,padding:"2px 8px",fontSize:11,background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:6,display:"flex",alignItems:"center",gap:3}}>
+            <span style={{fontSize:12}}>&#x2715;</span>
           </button>
-        ))}
+        </div>
+      )}
+
+      {/* MAIN LAYOUT */}
+      <div style={{display:"flex",flex:1,overflow:"hidden"}}>
+
+        {/* SIDEBAR */}
+        <div style={{
+          width:sidebarOpen?180:48,background:C.panel,
+          borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",
+          flexShrink:0,transition:"width .2s ease",overflow:"hidden",
+          boxShadow:"2px 0 8px #00000022"}}>
+
+          <button onClick={()=>setSidebarOpen(o=>!o)} title={sidebarOpen?"Collapse":"Expand"}
+            style={{...S.btn,background:"transparent",padding:"10px",fontSize:13,
+              borderBottom:`1px solid ${C.border}`,borderRadius:0,color:C.muted,
+              width:"100%",textAlign:sidebarOpen?"right":"center"}}>
+            {sidebarOpen?"◁":"▷"}
+          </button>
+
+          <div style={{flex:1,overflowY:"auto",padding:"6px 0"}}>
+            {NAV.find(g=>g.group===activeGroup)?.tabs.map(t=>{
+              const badge=t.badge?.();
+              const isActive=tab===t.id;
+              return(
+                <button key={t.id}
+                  onClick={()=>{setTab(t.id);if(t.id==="ALERTS")setUnreadAlerts(0);if(t.id==="EVENTS")setUnreadEvents(0);if(t.id==="CMDLOG")setUnreadCmds(0);}}
+                  title={t.label}
+                  style={{...S.btn,width:"100%",textAlign:"left",borderRadius:0,
+                    padding:sidebarOpen?"8px 16px":"10px",
+                    background:isActive?C.accent+"18":"transparent",
+                    color:isActive?C.accent:C.muted,fontWeight:isActive?700:400,
+                    borderLeft:isActive?`3px solid ${C.accent}`:"3px solid transparent",
+                    display:"flex",alignItems:"center",gap:8,fontSize:12,
+                    whiteSpace:"nowrap",overflow:"hidden",
+                    transition:"all .15s",animation:isActive?"slideIn .2s":"none"}}>
+                  <span style={{fontSize:16,flexShrink:0}}>{t.icon}</span>
+                  {sidebarOpen&&<span style={{flex:1}}>{t.label}</span>}
+                  {sidebarOpen&&badge>0&&<Badge n={badge} color={t.bcolor||C.red}/>}
+                  {!sidebarOpen&&badge>0&&(
+                    <span style={{position:"absolute",top:6,right:6,width:7,height:7,
+                      borderRadius:"50%",background:t.bcolor||C.red}}/>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{borderTop:`1px solid ${C.border}`,padding:"6px 0"}}>
+            <button onClick={()=>setQuickStats(s=>!s)} title="Toggle stats bar"
+              style={{...S.btn,width:"100%",background:"transparent",padding:"8px",
+                fontSize:12,color:C.muted,textAlign:"left",display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:16}}>📊</span>{sidebarOpen&&"Stats Bar"}
+            </button>
+          </div>
+        </div>
+
+        {/* CONTENT */}
+        <div style={{flex:1,overflowY:"auto",padding:"16px 20px",minWidth:0}}>
+
+          {/* page header */}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,
+            paddingBottom:12,borderBottom:`1px solid ${C.border}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:12}}>
+              <div style={{width:36,height:36,borderRadius:10,
+                background:NAV.find(g=>g.tabs.some(t=>t.id===tab))?.color+"22"||C.accent+"22",
+                border:`1px solid ${NAV.find(g=>g.tabs.some(t=>t.id===tab))?.color||C.accent}44`,
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>
+                {NAV.flatMap(g=>g.tabs).find(t=>t.id===tab)?.icon||"◈"}
+              </div>
+              <div>
+                <div style={{fontSize:17,fontWeight:800,color:C.text}}>
+                  {NAV.flatMap(g=>g.tabs).find(t=>t.id===tab)?.label||tab}
+                </div>
+                <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:0.8}}>
+                  {NAV.find(g=>g.tabs.some(t=>t.id===tab))?.label||""}
+                </div>
+              </div>
+            </div>
+            {/* per-tab quick actions */}
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+              {tab==="ALERTS"&&<><button onClick={()=>setAlertSub("active")} style={{...S.btn,padding:"4px 10px",fontSize:11,background:C.red+"22",color:C.red,border:`1px solid ${C.red}44`,borderRadius:8}}>\ud83d\udea8 Active ({activeAlerts.length})</button><button onClick={()=>setAlertSub("blocked")} style={{...S.btn,padding:"4px 10px",fontSize:11,borderRadius:8}}>\ud83d\udeab Blocked ({blockedHosts.length})</button></>}
+              {tab==="PACKETS"&&<><button onClick={()=>setPktPaused(p=>!p)} style={{...S.btn,padding:"4px 10px",fontSize:11,background:pktPaused?C.green+"22":C.orange+"22",color:pktPaused?C.green:C.orange,border:`1px solid ${pktPaused?C.green:C.orange}44`,borderRadius:8}}>{pktPaused?"\u25b6 Resume":"\u23f8 Pause"}</button><button onClick={()=>{setAllPackets([]);setLastPktId(0);showToast("Buffer cleared","info");}} style={{...S.btn,padding:"4px 10px",fontSize:11,background:C.red+"22",color:C.red,borderRadius:8}}>\ud83d\uddd1 Clear</button></>}
+              {tab==="TOPOLOGY"&&<><button onClick={()=>setDragMode(d=>!d)} style={{...S.btn,padding:"4px 10px",fontSize:11,background:dragMode?C.accent+"33":C.navy,color:dragMode?C.accent:C.muted,border:`1px solid ${dragMode?C.accent:C.border}`,borderRadius:8}}>{dragMode?"\u2713 Drag ON":"\ud83d\udd0e Drag Nodes"}</button><button onClick={()=>{setCustomPos({});posRef.current={};}} style={{...S.btn,padding:"4px 10px",fontSize:11,borderRadius:8}}>\ud83d\udd04 Reset</button></>}
+              {tab==="FLOWS"&&<button onClick={()=>setShowAddFlow(v=>!v)} style={{...S.btn,padding:"4px 10px",fontSize:11,background:C.green+"22",color:C.green,border:`1px solid ${C.green}44`,borderRadius:8}}>+ Add Flow</button>}
+              {tab==="REPORTS"&&<button onClick={()=>showToast("Generating report...","info")} style={{...S.btn,padding:"4px 10px",fontSize:11,borderRadius:8}}>\ud83d\udccb Generate</button>}
+            </div>
+          </div>
+
+          {/* tab content */}
+          {tab==="DASHBOARD"  && renderDashboard()}
+          {tab==="TOPOLOGY"   && renderTopo()}
+          {tab==="ALERTS"     && renderAlerts()}
+          {tab==="THREATS"    && renderThreats()}
+          {tab==="PACKETS"    && renderPackets()}
+          {tab==="SESSIONS"   && renderConnections()}
+          {tab==="HOSTS"      && renderHosts()}
+          {tab==="FLOWS"      && renderFlows()}
+          {tab==="QOS"        && renderQos()}
+          {tab==="GRAPHS"     && renderGraphs()}
+          {tab==="TESTS"      && renderTests()}
+          {tab==="CMDLOG"     && renderCmdlog()}
+          {tab==="EVENTS"     && renderEvents()}
+          {tab==="REPORTS"    && renderReports()}
+          {tab==="EXPORT"     && renderExport()}
+          {tab==="SIMULATE"   && renderSimulate()}
+          {tab==="NETCALC"    && renderNetCalc()}
+          {tab==="RTMAP"      && renderRTMap()}
+          {tab==="PLAYBOOK"   && renderPlaybook()}
+        </div>
       </div>
-      {/* Content */}
-      {tab==="DASHBOARD"  && renderDashboard()}
-      {tab==="TOPOLOGY"   && renderTopo()}
-      {tab==="ALERTS"     && renderAlerts()}
-      {tab==="THREATS"    && renderThreats()}
-      {tab==="PACKETS"    && renderPackets()}
-      {tab==="SESSIONS"   && renderConnections()}
-      {tab==="HOSTS"      && renderHosts()}
-      {tab==="FLOWS"      && renderFlows()}
-      {tab==="QOS"        && renderQos()}
-      {tab==="GRAPHS"     && renderGraphs()}
-      {tab==="TESTS"      && renderTests()}
-      {tab==="CMDLOG"     && renderCmdlog()}
-      {tab==="EVENTS"     && renderEvents()}
-      {tab==="REPORTS"    && renderReports()}
-      {tab==="EXPORT"     && renderExport()}
-      {tab==="SIMULATE"  && renderSimulate()}
-      {tab==="NETCALC"   && renderNetCalc()}
     </div>
   );
 }
